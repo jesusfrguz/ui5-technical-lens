@@ -1,0 +1,3 @@
+<mvc:View xmlns:mvc="sap.ui.core.mvc" xmlns="sap.m">
+  <Panel headerText="Vista cargada de forma dinámica" class="sapUiSmallMarginTop"><content><Text text="Details.view.xml · las etiquetas se actualizan sin volver a activar la extensión." class="sapUiSmallMargin"/></content></Panel>
+</mvc:View>
