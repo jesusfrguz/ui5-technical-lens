@@ -8,6 +8,12 @@ Creada por **Jesús Franco Guzmán** · [LinkedIn](https://es.linkedin.com/in/je
 
 La versión **1.3.1** permite fijar la tarjeta de modelos/OData con **Alt**, sin hacer clic en el elemento de la app. Una vez fijada, puedes seleccionar y copiar su contenido. **Alt o Esc** la cierran de forma independiente. Las etiquetas de vistas y fragmentos conservan su visualización permanente. Para actualizar una instalación descomprimida, sustituye sus archivos por los del ZIP nuevo, pulsa **Recargar** en su tarjeta de `chrome://extensions` y recarga la app para renovar los scripts ya inyectados.
 
+## Vista de ejemplo
+
+![App de ejemplo SAPUI5 con un campo resaltado y su tarjeta de modelos y OData](docs/images/demo-inspector.png)
+
+Captura de la app utilizada en las pruebas: al señalar el campo **Cliente · OData V2**, el inspector muestra sus bindings, los modelos `sales` y `ui`, y el servicio asociado. Los datos y servicios de esta demo son de ejemplo.
+
 ## Instalación
 
 1. Descomprime `UI5-Technical-Lens.zip` si utilizas el paquete de `dist`.
