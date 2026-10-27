@@ -1,0 +1,4 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <HBox id="statOne" class="sapUiSmallMarginBottom" alignItems="Center"><GenericTag text="Total pedidos" status="Information"/><Text text="  24 pedidos registrados" class="sapUiSmallMarginBegin"/></HBox>
+  <HBox id="statTwo" class="sapUiSmallMarginBottom" alignItems="Center"><GenericTag text="Importe aprobado" status="Success"/><Text text="  18.450 EUR" class="sapUiSmallMarginBegin"/></HBox>
+</core:FragmentDefinition>

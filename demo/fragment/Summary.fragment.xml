@@ -1,0 +1,5 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <Panel id="summary" headerText="Resumen del cliente" class="sapUiMediumMarginBottom">
+    <VBox class="sapUiSmallMargin"><Title text="Cliente de ejemplo · SAPUI5"/><Text text="Fragmento declarativo: Summary.fragment.xml"/><core:Fragment fragmentName="demo.fragment.Badge" type="XML"/></VBox>
+  </Panel>
+</core:FragmentDefinition>
