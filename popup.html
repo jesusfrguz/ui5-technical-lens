@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UI5 Technical Lens</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="brand-icon" aria-hidden="true">&lt;/&gt;</div>
+    <div><h1>Technical Lens <span>UI5</span></h1><p>El código, sobre tu aplicación.</p></div>
+    <button id="refresh" class="icon-button" title="Actualizar detección" aria-label="Actualizar detección">↻</button>
+  </header>
+  <main>
+    <section class="app-card" aria-label="Aplicación actual">
+      <div class="eyebrow"><span id="status-dot" class="dot"></span><span id="runtime">Buscando SAPUI5…</span></div>
+      <h2 id="app-title">Aplicación actual</h2>
+      <p id="app-id" class="mono"></p>
+      <p id="app-component" class="mono"></p>
+      <p id="app-url"></p>
+    </section>
+    <section class="settings" aria-label="Opciones de superposición">
+      <label class="master"><span><strong>Mostrar nombres técnicos</strong><small>Vistas, fragmentos, modelos y OData</small></span><input type="checkbox" id="enabled" role="switch"><span class="switch" aria-hidden="true"></span></label>
+      <div class="filters">
+        <label><input type="checkbox" id="views" checked><span class="key view">V</span> Vistas</label>
+        <label><input type="checkbox" id="fragments" checked><span class="key fragment">F</span> Fragmentos</label>
+        <label class="compact"><input type="checkbox" id="compact"> Nombre corto</label>
+      </div>
+      <div class="filters data-filters">
+        <label><input type="checkbox" id="models"><span class="key model">M</span> Modelos</label>
+        <label><input type="checkbox" id="odatas"><span class="key odata">O</span> OData</label>
+        <span>Alt fija · Alt o Esc cierra</span>
+      </div>
+    </section>
+    <div id="message" role="status" aria-live="polite"></div>
+    <div class="inventory-heading"><h2>Elementos detectados <span id="count">0</span></h2><span id="visible-count"></span></div>
+    <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Buscar fichero, modelo, servicio o campo…" aria-label="Buscar elementos"></div>
+    <div id="inventory" class="inventory" aria-live="polite"></div>
+    <aside id="fragment-note">Los fragmentos se identifican al crearse. Si falta alguno, activa las etiquetas, recarga la app y vuelve a abrirlo. Los fragmentos sin nombre de origen no se pueden identificar.</aside>
+    <button id="reload" class="reload">Recargar app para capturar fragmentos</button>
+  </main>
+  <footer><span><i></i> Vistas</span><span><i class="purple"></i> Fragmentos</span><span><i class="green"></i> Modelos</span><span><i class="orange"></i> OData</span><span class="local">Procesado local</span></footer>
+  <script src="popup.js"></script>
+</body>
+</html>
