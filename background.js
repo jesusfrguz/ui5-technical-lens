@@ -4,11 +4,58 @@ const stateKey = (tabId) => `tab:${tabId}`;
 // Serialize writes: popup changes and newly loaded frames must see one consistent state.
 let writes = Promise.resolve();
 let hoverCommands = Promise.resolve();
+const devtools = new Map();
+const validToken = (value) => typeof value === "string" && /^h[a-f0-9]{32}_\d+$/.test(value);
+async function sourceRequest(tabId, token, frameId) {
+  const results = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN",
+    func: (id) => typeof window.__UI5_TECH_LENS_EVENTS__?.resolve(id) === "function" ? location.href : null, args: [token] });
+  const frameURL = results[0]?.result;
+  if (!frameURL) throw new Error("La función ya no está disponible. Actualiza la inspección.");
+  return { action: "openHandler", token, requestId: token, frameURL };
+}
+function sourceResult(tabId, token, status) {
+  const result = { channel: "ui5-lens", tabId, sourceResult: { token, status: String(status).slice(0, 300) } };
+  chrome.tabs.sendMessage(tabId, result).catch(() => {});
+  chrome.runtime.sendMessage(result).catch(() => {});
+}
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "ui5-lens-devtools" || !port.sender?.url?.startsWith(chrome.runtime.getURL("devtools.html"))) return;
+  let tabId;
+  port.onMessage.addListener(async (message) => {
+    if (message.action === "connect" && Number.isInteger(message.tabId)) {
+      tabId = message.tabId; devtools.set(tabId, port);
+      const key = `source:${tabId}`, stored = await chrome.storage.session.get(key);
+      if (stored[key]) {
+        await chrome.storage.session.remove(key);
+        try { port.postMessage(await sourceRequest(tabId, stored[key].token, stored[key].frameId)); }
+        catch (error) { sourceResult(tabId, stored[key].token, error.message); }
+      }
+    } else if (message.action === "result" && Number.isInteger(tabId) && validToken(message.requestId)) {
+      sourceResult(tabId, message.requestId, message.status);
+    }
+  });
+  port.onDisconnect.addListener(() => { if (devtools.get(tabId) === port) devtools.delete(tabId); });
+});
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (message?.channel !== "ui5-lens") return;
   const fromExtensionPage = sender.url?.startsWith(chrome.runtime.getURL(""));
   const tabId = fromExtensionPage ? message.tabId : sender.tab?.id;
   if (!Number.isInteger(tabId)) return;
+  if (message.action === "openHandler" && validToken(message.token)) {
+    (async () => {
+      const frameId = fromExtensionPage ? message.frameId : sender.frameId;
+      if (!Number.isInteger(frameId)) throw new Error("Marco no válido");
+      // Derive frame URL and validate the live function in the target frame.
+      const request = await sourceRequest(tabId, message.token, frameId);
+      const port = devtools.get(tabId);
+      if (port) { port.postMessage(request); reply({ status: "Abriendo la función en Sources…" }); }
+      else {
+        await chrome.storage.session.set({ [`source:${tabId}`]: { token: message.token, frameId } });
+        reply({ status: "Abre DevTools con F12 o Ctrl+Mayús+I. Se abrirá la última función solicitada." });
+      }
+    })().catch((error) => reply({ error: error.message }));
+    return true;
+  }
   if (message.action === "hoverCommand" && sender.tab && message.command === "toggle") {
     hoverCommands = hoverCommands.catch(() => {}).then(async () => {
       // Query the live frames, so pinning still works after service-worker restarts
@@ -44,4 +91,4 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     return true;
   }
 });
-chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove(stateKey(tabId)));
+chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove([stateKey(tabId), `source:${tabId}`]));

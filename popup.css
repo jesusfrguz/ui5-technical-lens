@@ -12,3 +12,5 @@
 .binding-details{font:10px/1.6 Consolas,monospace;overflow-wrap:anywhere;margin-top:7px}
 footer .green{background:#11835e}footer .orange{background:#af580d}
 .controller{color:#5656b8;background:#ededfb}.controller-filters{margin-top:10px}.controller-filters>span{margin-left:auto;font-size:9px;color:#85949f}
+
+.key.event{background:#eeeefd;color:#5656b8}.binding-details button{margin:4px 0 8px;padding:5px 8px;border:1px solid #cad6e4;border-radius:5px;background:#f4f5ff;color:#41418e;cursor:pointer}

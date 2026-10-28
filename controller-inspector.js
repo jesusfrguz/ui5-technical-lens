@@ -27,7 +27,7 @@
     }
     return { path: role === "extensión" && !name.startsWith("module:") ? `${name.replace(/\./g, "/")}.js` : conventional, pathSource: "convención UI5" };
   }
-  function inspect(entry) {
+  function context(entry) {
     let view, controller, association;
     if (entry.kind === "view") {
       view = entry.roots[0]; controller = safe(() => view.getController()); association = "controlador de la vista";
@@ -38,6 +38,10 @@
       view = closestView(entry.containingView) || entry.roots.map(closestView).find(Boolean);
       controller = safe(() => view.getController()); association = "vista contenedora";
     }
+    return { view, controller, association };
+  }
+  function inspect(entry) {
+    const { view, controller, association } = context(entry);
     const controllers = [], seenNames = new Set();
     function add(name, role, Class) {
       if (typeof name !== "string" || generic(name) || seenNames.has(name)) return;
@@ -63,5 +67,5 @@
     return { controllers, controllerStatus: status, association,
       ownerView: safe(() => view.getViewName(), ""), ownerViewId: safe(() => view.getId(), "") };
   }
-  Object.defineProperty(window, "__UI5_TECH_LENS_CONTROLLERS__", { value: Object.freeze({ inspect }), configurable: true });
+  Object.defineProperty(window, "__UI5_TECH_LENS_CONTROLLERS__", { value: Object.freeze({ inspect, context }), configurable: true });
 })();

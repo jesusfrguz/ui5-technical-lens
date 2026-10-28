@@ -4,13 +4,14 @@
   const H = window.__UI5_TECH_LENS_CORE__;
   const D = window.__UI5_TECH_LENS_DATA__;
   const C = window.__UI5_TECH_LENS_CONTROLLERS__;
+  const E = window.__UI5_TECH_LENS_EVENTS__;
   let preferences = H.options(), host, layer, hoverLayer, observer, timer, runtimeTimer, frameRequest, hoverRequest, lastScan = 0;
   let pointer = null, dismissedNode = null, activeHoverNode = null;
   let pinned = null, handledAlt = false, handledEscape = false;
   let dataTargets = new Map();
   let entries = [], controls = [], hooksInstalled = false, loadingModules = false, selected = "";
-  const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas", controller: "controllers" };
-  const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O", controller: "C" };
+  const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas", controller: "controllers", event: "controllers" };
+  const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O", controller: "C", event: "E" };
   const inspectionEnabled = () => preferences.models || preferences.odatas || preferences.controllers;
   const inspectionOptions = () => `${preferences.models}:${preferences.odatas}:${preferences.controllers}`;
   const fragments = new Map(), wrappers = new WeakSet();
@@ -194,9 +195,32 @@
         source: info.association, roots: source.roots, scope: source.path, scopeKind: source.kind,
         controlType: safe(() => source.roots[0].getMetadata().getName(), "Control"), models: [], bindings: [], ...info });
     }
+    if (preferences.controllers) {
+      const sources = new Map(), contexts = new Map();
+      for (const source of sourceEntries) for (const root of source.roots) sources.set(root, source);
+      for (const control of controls) {
+        let current = control, source;
+        const seen = new Set();
+        while (current && !seen.has(current)) {
+          seen.add(current); source = sources.get(current);
+          if (source) break;
+          current = safe(() => current.getParent());
+        }
+        const fallback = source || { kind: "fragment", roots: [control] };
+        if (!contexts.has(fallback)) contexts.set(fallback, { ...C.context(fallback), ...C.inspect(fallback) });
+        const context = contexts.get(fallback), events = E.inspect(control, context);
+        if (!events.length) continue;
+        const controlType = safe(() => control.getMetadata().getName(), "Control");
+        next.push({ key: `event:${controlId(control)}`, kind: "event", name: controlType, controlType,
+          scope: source?.path || "", scopeKind: source?.kind, roots: [control], source: "eventos registrados",
+          path: events.map((event) => `${event.name} → ${event.handlers.map((handler) => handler.name).join(", ")}`).join("\n"),
+          models: [], bindings: [], events, controllers: context.controllers, association: context.association,
+          controllerStatus: context.controllerStatus, ownerView: context.ownerView });
+      }
+    }
     entries = next;
     dataTargets = new Map();
-    for (const entry of entries.filter((item) => ["model", "odata", "controller"].includes(item.kind))) {
+    for (const entry of entries.filter((item) => ["model", "odata", "controller", "event"].includes(item.kind))) {
       for (const node of entry.roots.flatMap(domRoots)) {
         if (!dataTargets.has(node)) dataTargets.set(node, []);
         dataTargets.get(node).push(entry);
@@ -270,24 +294,28 @@
 
   function hoveredData() {
     // "Locate" from the popup also previews the data, even without a pointer.
-    const located = entries.find((entry) => entry.key === selected && ["model", "odata", "controller"].includes(entry.kind) && preferences[kindOption[entry.kind]]);
+    const located = entries.find((entry) => entry.key === selected && ["model", "odata", "controller", "event"].includes(entry.kind) && preferences[kindOption[entry.kind]]);
     if (located) {
       const node = located.roots.flatMap(domRoots).find((item) => visibleRect(item));
       if (node) return { node, items: dataTargets.get(node) || [located], located: true };
     }
     if (!pointer) return null;
     let node = document.elementFromPoint(pointer.x, pointer.y);
-    let data = null, controller = null, passedControl = false;
+    let data = null, controller = null, eventTarget = null, passedControl = false;
     while (node && node !== host) {
       if (node.tagName === "IFRAME") return null; // the frame manages its own card
       const items = dataTargets.get(node);
+      if (!eventTarget && preferences.controllers) {
+        const matches = items?.filter((entry) => entry.kind === "event");
+        if (matches?.length) eventTarget = { node, items: matches };
+      }
       if (!controller && preferences.controllers) {
         const matches = items?.filter((entry) => entry.kind === "controller");
         const item = matches?.find((entry) => entry.scopeKind === "fragment") || matches?.[0];
         if (item) controller = { node, items: [item] };
       }
       if (!data && !passedControl) {
-        const matches = items?.filter((entry) => entry.kind !== "controller");
+        const matches = items?.filter((entry) => entry.kind === "model" || entry.kind === "odata");
         if (matches?.length) data = { node, items: matches };
       }
       // Don't attribute an unbound field/button to a bound ancestor window.
@@ -295,9 +323,9 @@
       if (!preferences.controllers && passedControl) break;
       node = node.parentElement;
     }
-    const target = data || controller;
+    const target = data || eventTarget || controller;
     if (!target || target.node === dismissedNode) return null;
-    return { node: target.node, items: [...(data?.items || []), ...(controller?.items || [])] };
+    return { node: target.node, items: [...(data?.items || []), ...(eventTarget?.items || []), ...(eventTarget ? [] : controller?.items || [])] };
   }
   function renderHover() {
     if (!hoverLayer) return;
@@ -325,8 +353,9 @@
     activeHoverNode = hovered.node;
     const entry = items.find((item) => item.kind === "model") || items[0];
     const odata = items.some((item) => item.kind === "odata");
-    const controllerItems = items.filter((item) => item.kind === "controller");
-    const controllerOnly = items.every((item) => item.kind === "controller");
+    const controllerItems = items.filter((item) => item.kind === "controller" || item.kind === "event");
+    const eventItems = items.filter((item) => item.kind === "event");
+    const controllerOnly = items.every((item) => item.kind === "controller" || item.kind === "event");
     const outline = document.createElement("div"), card = document.createElement("div");
     outline.className = `hover-outline${odata ? " odata" : controllerOnly ? " controller" : ""}`;
     outline.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
@@ -344,15 +373,41 @@
         try { await copyCard(content); copy.textContent = "Copiado"; }
         catch { copy.textContent = "Selecciona y usa Ctrl+C"; }
       });
-      card.prepend(actions); card.tabIndex = 0; card.setAttribute("role", "region"); card.setAttribute("aria-label", "Inspector de modelos y OData fijado");
+      card.prepend(actions); card.tabIndex = 0; card.setAttribute("role", "region"); card.setAttribute("aria-label", "Inspector técnico fijado");
       for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "wheel"]) card.addEventListener(type, (event) => event.stopPropagation());
     }
     const headings = [items.some((item) => item.kind === "model") ? "Modelos" : "", odata ? "OData" : "", controllerItems.length ? "Controladores" : ""].filter(Boolean);
     add(content, "div", "hover-heading", headings.join(headings.length === 2 ? " y " : " · "));
-    add(content, "div", "hover-name", controllerOnly ? entry.scope.split("/").pop() : entry.controlType.split(".").pop());
+    add(content, "div", "hover-name", controllerOnly && !eventItems.length ? entry.scope.split("/").pop() : entry.controlType.split(".").pop());
     add(content, "div", "hover-id", card.dataset.controlId);
     if (entry.scope) add(content, "div", "hover-scope", entry.scope);
     let omitted = 0;
+    for (const item of eventItems) {
+      const section = add(content, "div", "hover-section", "");
+      add(section, "div", "hover-section-title", "Eventos y subrutinas");
+      for (const event of pinned ? item.events : item.events.slice(0, 4)) {
+        const row = add(section, "div", "hover-row", "");
+        add(row, "strong", "", event.name);
+        add(row, "code", "", `Parámetros del evento: ${event.parameters.map((param) => `${param.name}: ${param.type}`).join(", ") || "sin parámetros declarados"}`);
+        for (const handler of pinned ? event.handlers : event.handlers.slice(0, 4)) {
+          add(row, "code", "", `→ ${handler.controller} · ${handler.name}(${handler.arguments})`);
+          if (handler.path) add(row, "code", "", handler.path);
+          if (pinned) {
+            if (handler.declaration) add(row, "code", "", `XML: ${handler.declaration}`);
+            add(row, "code", "", handler.resolution);
+            const button = add(row, "button", "hover-copy", "Ver función en DevTools"); button.type = "button";
+            button.dataset.handlerToken = handler.token;
+            const status = add(row, "div", "hover-source-status", ""); status.setAttribute("role", "status");
+            button.addEventListener("click", () => {
+              status.textContent = "Conectando con DevTools…";
+              window.postMessage({ channel: "ui5-lens:source-request", token: handler.token }, "*");
+            });
+          }
+        }
+        omitted += Math.max(0, event.handlers.length - 4);
+      }
+      omitted += Math.max(0, item.events.length - 4);
+    }
     if (entry.bindings.length) {
       const section = add(content, "div", "hover-section", "");
       add(section, "div", "hover-section-title", "Bindings del elemento");
@@ -541,7 +596,7 @@
       version: window.sap?.ui?.version || "", title: document.title, url: location.href,
       options: preferences, tracking: hooksInstalled, apps,
       entries: entries.map((entry) => ({ key: entry.key, kind: entry.kind, name: entry.name, path: entry.path, source: entry.source,
-        controlType: entry.controlType, scope: entry.scope, models: entry.models, bindings: entry.bindings,
+        controlType: entry.controlType, scope: entry.scope, models: entry.models, bindings: entry.bindings, events: entry.events,
         scopeKind: entry.scopeKind, controllers: entry.controllers, controllerStatus: entry.controllerStatus,
         association: entry.association, ownerView: entry.ownerView, ownerViewId: entry.ownerViewId,
         ids: entry.roots.map(controlId), visible: entry.roots.flatMap(domRoots).some((node) => Boolean(visibleRect(node))) }))
@@ -566,6 +621,11 @@
   Object.defineProperty(window, "__UI5_TECH_LENS__", { value: api, configurable: true });
   window.addEventListener("message", (event) => {
     if (event.source === window && event.data?.channel === "ui5-lens:options") setOptions(event.data.options);
+    if (event.source === window && event.data?.channel === "ui5-lens:source-result" && typeof event.data.status === "string") {
+      for (const button of hoverLayer?.querySelectorAll("[data-handler-token]") || []) {
+        if (button.dataset.handlerToken === event.data.token) button.nextElementSibling.textContent = event.data.status;
+      }
+    }
   });
   window.postMessage({ channel: "ui5-lens:ready" }, "*");
 })();

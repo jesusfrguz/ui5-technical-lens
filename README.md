@@ -4,9 +4,9 @@ Extensión de Chrome (Manifest V3) que muestra los ficheros técnicos de las vis
 
 Creada por **Jesús Franco Guzmán** · [LinkedIn](https://es.linkedin.com/in/jesus-franco-guzman).
 
-[Descargar la extensión 1.4.0 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.4.0.zip).
+[Descargar la extensión 1.5.0 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.5.0.zip).
 
-La versión **1.4.0** incorpora el flag **Controladores**, que identifica el controlador y sus recursos asociados a cada vista o fragmento. Utiliza la misma tarjeta al pasar el ratón: **Alt** la fija para seleccionar y copiar; **Alt o Esc** la cierran de forma independiente. Para actualizar una instalación descomprimida, sustituye sus archivos por los del ZIP nuevo, pulsa **Recargar** en su tarjeta de `chrome://extensions` y recarga la app para renovar los scripts ya inyectados.
+La versión **1.5.0** amplía **Controladores** con eventos, parámetros y subrutinas de botones, matchcodes y otros controles. Incluye **Ver función en DevTools** para navegar al archivo y la línea de la función real. Utiliza la misma tarjeta al pasar el ratón: **Alt** la fija para seleccionar y copiar; **Alt o Esc** la cierran de forma independiente. Para actualizar una instalación descomprimida, sustituye sus archivos por los del ZIP nuevo, pulsa **Recargar** en su tarjeta de `chrome://extensions` y recarga la app para renovar los scripts ya inyectados.
 
 ## Vista de ejemplo
 
@@ -54,6 +54,23 @@ La inspección usa metadatos de binding/modelo del cliente: no lee valores de ca
 
 Se usan APIs públicas de bindings y modelos; para enumerar nombres de modelos se consultan de forma defensiva los mapas internos `oModels` y `oPropagatedProperties.oModels`, porque no existe una enumeración pública universal en todas las versiones. OData V2 puede requerir leer `sServiceUrl`; V4 utiliza `getServiceUrl()` si está disponible. Un cambio interno de UI5 puede requerir adaptar estas lecturas. Al inspeccionar listas muy grandes, conviene activar únicamente el tipo de etiqueta necesario.
 
+## Eventos y navegación al código
+
+Con **Controladores** activo, señala un botón, un matchcode o cualquier control con eventos registrados. La tarjeta muestra eventos como `press`, `change` y `valueHelpRequest`, los nombres/tipos de sus parámetros declarados y los métodos/subrutinas asociados, con los argumentos formales recuperables. El panel incluye estas entradas con la marca **E** y permite buscar por evento o handler. Se muestran todos los listeners registrados para cada evento.
+
+![Matchcode con sus eventos y métodos del controlador](docs/images/demo-events.png)
+
+1. Señala el control y pulsa **Alt** para fijar la tarjeta sin hacer clic en la app.
+2. Pulsa **Ver función en DevTools** junto al método. También está disponible al desplegar **Eventos, parámetros y subrutinas** en el popup.
+3. Si DevTools está cerrado, abre **F12** o **Ctrl+Mayús+I**. La última función solicitada queda pendiente y se abre al conectar.
+4. Chrome selecciona **Sources**, el fichero cargado y la línea de la función. La extensión no ejecuta el handler ni añade breakpoints.
+
+Chrome exige que el usuario abra DevTools; una extensión normal no puede abrir esa ventana por sí sola. Después de actualizar la extensión, cierra y vuelve a abrir DevTools si ya estaba abierto. La navegación utiliza `inspect(fn)` de las herramientas de desarrollo, sin solicitar permiso `debugger`. No se inventan números de línea ni se buscan textos parecidos en el código. Si hay código minificado o un bundle, se abre esa ubicación real; la correspondencia con el archivo original depende de los source maps disponibles en DevTools. Funciones nativas/bound o wrappers de terceros pueden carecer de una ubicación navegable.
+
+Se lee defensivamente el registro interno `mEventRegistry` y los metadatos de eventos de UI5. Solo se muestran eventos con listeners registrados; no se registra actividad, no se interceptan valores disparados y no se leen `oData` ni parámetros de negocio. Los nombres de argumentos son orientativos si el código está minificado. En handlers XML con argumentos se resuelve la ruta del método en el receptor actual, sin evaluar expresiones. Las declaraciones XML se resumen como `.metodo(…)`, sin copiar sus valores literales. Si no se puede resolver un alias/módulo o wrapper, se conserva la función registrada y se indica así. No se inspeccionan listeners DOM ajenos a UI5 ni se reconstruye la cadena de llamadas que pueda ejecutar el handler.
+
+En iframes se usa su URL como contexto de DevTools. Si varios marcos tienen exactamente la misma URL, la API de Chrome puede seleccionar otro marco; en ese caso se informa de que la función no se encontró. Una recarga invalida las referencias anteriores y requiere volver a señalar el control.
+
 ## Detección y límites
 
 Los controladores de las vistas se obtienen de su instancia real mediante `getController()` y sus metadatos. Para fragmentos se conserva el controlador recibido durante su creación, incluidos `Controller.loadFragment()` y fragmentos declarativos; si falta esa información se consulta la vista contenedora más cercana. Un fragmento no tiene un controlador propio de MVC. Si recibe un objeto anónimo de handlers, o no hay controlador, se indica expresamente y no se inventa un fichero.
@@ -88,7 +105,7 @@ npm test
 npm run demo
 ```
 
-Abre `http://127.0.0.1:4173`. La demo necesita Internet para cargar SAPUI5 1.120.40 desde `ui5.sap.com`. Incluye una vista inicial, fragmentos declarativos/anidados, un fragmento con varias raíces, un diálogo con `Controller.loadFragment()` y una segunda vista dinámica.
+Abre `http://127.0.0.1:4173`. La demo necesita Internet para cargar SAPUI5 1.120.40 desde `ui5.sap.com`. Incluye un matchcode con eventos de ayuda y cambio, un botón con handler XML parametrizado, una vista inicial, fragmentos declarativos/anidados, un fragmento con varias raíces, un diálogo con `Controller.loadFragment()` y una segunda vista dinámica.
 
 ```powershell
 npx playwright install chromium
@@ -100,7 +117,7 @@ Las pruebas de navegador usan un perfil temporal aislado con la extensión real,
 
 Si Windows bloquea el ejecutable descargado de Chromium, se puede usar Edge instalado para la misma prueba: `$env:UI5_TEST_BROWSER = 'msedge'; npm run test:browser`. La verificación realizada en este entorno usó Edge/Chromium con la extensión real y SAPUI5 1.120.x.
 
-Referencias de mantenimiento: [creación de fragmentos en SAPUI5](https://github.com/SAP-docs/sapui5/blob/main/docs/04_Essentials/instantiation-of-fragments-04129b2.md), [implementación de Fragment en OpenUI5](https://github.com/UI5/openui5/blob/master/src/sap.ui.core/src/sap/ui/core/Fragment.js), [Chrome Scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting).
+Referencias de mantenimiento: [creación de fragmentos en SAPUI5](https://github.com/SAP-docs/sapui5/blob/main/docs/04_Essentials/instantiation-of-fragments-04129b2.md), [implementación de Fragment en OpenUI5](https://github.com/UI5/openui5/blob/master/src/sap.ui.core/src/sap/ui/core/Fragment.js), [Chrome Scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting), [Chrome inspect(function)](https://developer.chrome.com/docs/devtools/console/utilities#inspect), [Chrome inspectedWindow.eval](https://developer.chrome.com/docs/extensions/reference/api/devtools/inspectedWindow).
 
 ## Autor
 

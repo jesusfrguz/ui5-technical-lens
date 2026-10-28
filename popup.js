@@ -3,8 +3,8 @@ const $ = (id) => document.getElementById(id);
 let tabId, tabTitle = "", frames = [], rows = [], options = {}, busy = false, updating = false;
 let renderedInventory = "";
 const optionKeys = ["enabled", "views", "fragments", "models", "odatas", "controllers", "compact"];
-const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas", controller: "controllers" };
-const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O", controller: "C" };
+const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas", controller: "controllers", event: "controllers" };
+const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O", controller: "C", event: "E" };
 function message(text, error = false) { $("message").textContent = text; $("message").className = error ? "error" : ""; }
 async function background(action, extra = {}) {
   const response = await chrome.runtime.sendMessage({ channel: "ui5-lens", action, tabId, ...extra });
@@ -12,7 +12,7 @@ async function background(action, extra = {}) {
   return response;
 }
 async function inject() {
-  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN", files: ["core.js", "data-inspector.js", "controller-inspector.js", "inspector.js"] });
+  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN", files: ["core.js", "data-inspector.js", "controller-inspector.js", "event-inspector.js", "inspector.js"] });
   await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["bridge.js"] });
 }
 async function inspect() {
@@ -44,7 +44,7 @@ async function inspect() {
 function render() {
   const query = $("search").value.trim().toLowerCase();
   const filtered = rows.filter((entry) => options[kindOption[entry.kind]] &&
-    `${entry.name} ${entry.path} ${entry.ids.join(" ")} ${entry.scope || ""} ${JSON.stringify(entry.models || [])} ${JSON.stringify(entry.controllers || [])}`.toLowerCase().includes(query));
+    `${entry.name} ${entry.path} ${entry.ids.join(" ")} ${entry.scope || ""} ${JSON.stringify(entry.models || [])} ${JSON.stringify(entry.controllers || [])} ${JSON.stringify(entry.events || [])}`.toLowerCase().includes(query));
   const signature = JSON.stringify(filtered);
   if (signature === renderedInventory) return;
   renderedInventory = signature;
@@ -63,10 +63,31 @@ function render() {
     body.className = "file-body";
     const name = document.createElement("div"), path = document.createElement("div"), meta = document.createElement("div");
     const dataEntry = entry.kind === "model" || entry.kind === "odata";
-    name.className = "file-name"; name.textContent = entry.kind === "controller" ? `${entry.scope.split("/").pop()} → controlador` : dataEntry ? `${entry.controlType.split(".").pop()} · ${entry.ids[0]}` : entry.path.split("/").pop();
+    name.className = "file-name"; name.textContent = entry.kind === "controller" ? `${entry.scope.split("/").pop()} → controlador` : dataEntry || entry.kind === "event" ? `${entry.controlType.split(".").pop()} · ${entry.ids[0]}` : entry.path.split("/").pop();
     path.className = "file-path"; path.textContent = entry.path;
     meta.className = "file-meta"; meta.textContent = `${entry.visible ? "Visible" : "Fuera de pantalla / sin DOM"} · ${entry.source}${entry.frameId ? ` · iframe ${entry.frameId}` : ""}`;
     body.title = entry.ids.join("\n"); body.append(name, path, meta);
+    if (entry.kind === "event") {
+      const details = document.createElement("details"), summary = document.createElement("summary"), info = document.createElement("div");
+      summary.textContent = "Eventos, parámetros y subrutinas"; info.className = "binding-details";
+      for (const event of entry.events) {
+        const title = document.createElement("div");
+        title.textContent = `${event.name}\nParámetros del evento: ${event.parameters.map((param) => `${param.name}: ${param.type}`).join(", ") || "sin parámetros declarados"}`;
+        info.append(title);
+        for (const handler of event.handlers) {
+          const text = document.createElement("p"), button = document.createElement("button"), status = document.createElement("div");
+          text.textContent = `${handler.controller} · ${handler.name}(${handler.arguments})\n${handler.path}\n${handler.declaration ? `XML: ${handler.declaration}\n` : ""}${handler.resolution}`;
+          button.textContent = "Ver función en DevTools"; button.type = "button"; button.dataset.handlerToken = handler.token;
+          status.setAttribute("role", "status");
+          button.addEventListener("click", async () => {
+            try { const response = await background("openHandler", { token: handler.token, frameId: entry.frameId }); status.textContent = response.status; }
+            catch (error) { status.textContent = error.message; }
+          });
+          info.append(text, button, status);
+        }
+      }
+      details.append(summary, info); body.append(details);
+    }
     if (entry.kind === "controller") {
       const details = document.createElement("details"), summary = document.createElement("summary"), info = document.createElement("div");
       summary.textContent = "Controladores asociados"; info.className = "binding-details";
@@ -102,6 +123,10 @@ async function locate(entry) {
   message(result[0]?.result ? "Elemento resaltado en amarillo durante unos segundos." : "El control no tiene DOM visible. Abre su pestaña o diálogo en la app y actualiza.");
 }
 function syncOptions() { for (const key of optionKeys) $(key).checked = Boolean(options[key]); }
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.channel !== "ui5-lens" || message.tabId !== tabId || !message.sourceResult) return;
+  for (const button of document.querySelectorAll("[data-handler-token]")) if (button.dataset.handlerToken === message.sourceResult.token) button.nextElementSibling.textContent = message.sourceResult.status;
+});
 function showError(error) { message(`No se pudo inspeccionar esta pestaña. ${error.message || error}`, true); }
 async function refresh() {
   if (busy) return; busy = true; $("refresh").disabled = true;
