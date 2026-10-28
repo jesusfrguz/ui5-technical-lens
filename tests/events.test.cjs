@@ -49,18 +49,20 @@ test("inherited handlers identify their declaring controller and resource", () =
   assert.equal(event.handlers[0].controller, "demo.Base"); assert.equal(event.handlers[0].path, "demo/Base.js");
   assert.equal(event.parameters[0].name, "flag");
 });
-test("DevTools navigation uses a validated token and the frame URL, never invokes the inspected handler", () => {
-  let listener, expression, options, reply, inspected, calls = 0;
-  const fn = () => { calls++; };
-  const context = { chrome: { runtime: { connect: () => ({ postMessage: (message) => { reply = message; }, onDisconnect: { addListener: () => {} }, onMessage: { addListener: (callback) => { listener = callback; } } }) },
-    devtools: { inspectedWindow: { tabId: 7, eval: (source, settings, callback) => {
-      expression = source; options = settings;
-      callback(vm.runInNewContext(source, { window: { __UI5_TECH_LENS_EVENTS__: { resolve: () => fn } }, inspect: (value) => { inspected = value; } }), null);
-    } } } } };
+test("DevTools opens only the matched resource with explicit zero-based line and column", async () => {
+  let listener, reply, opened;
+  const context = { __UI5_TECH_LENS_SOURCES__: require("../source-locator.js"), setTimeout, clearTimeout,
+    chrome: { runtime: { connect: () => ({ postMessage: (message) => { reply = message; }, onDisconnect: { addListener: () => {} }, onMessage: { addListener: (callback) => { listener = callback; } } }) },
+    devtools: { inspectedWindow: { tabId: 7, getResources: (callback) => callback([{ url: "https://example.com/Main.js", getContent: (callback) => callback("// heading\nconst fn = function run() {};", "") }]) },
+      panels: { openResource: (url, line, column, callback) => { opened = { url, line, column }; callback(); } } } } };
   vm.runInNewContext(fs.readFileSync(require("node:path").join(__dirname, "../devtools.js"), "utf8"), context);
   assert.equal(reply.tabId, 7);
-  listener({ action: "openHandler", token: "');alert(1)//" }); assert.equal(expression, undefined);
-  listener({ action: "openHandler", token: `h${"a".repeat(32)}_1`, requestId: `h${"a".repeat(32)}_1`, frameURL: "https://example.com/frame" });
-  assert.equal(options.frameURL, "https://example.com/frame"); assert.equal(inspected, fn); assert.equal(calls, 0);
-  assert.ok(reply.status.includes("línea real"));
+  await listener({ action: "openHandler", token: "');alert(1)//" }); assert.equal(opened, undefined);
+  const token = `h${"a".repeat(32)}_1`;
+  await listener({ action: "openHandler", token, requestId: token, descriptor: { source: "function run() {}", url: "https://example.com/Main.js" } });
+  assert.deepEqual(opened, { url: "https://example.com/Main.js", line: 1, column: 11 });
+  assert.ok(reply.status.includes("línea 2, columna 12"));
+  opened = undefined;
+  await listener({ action: "openHandler", token, requestId: token, descriptor: { source: "function missing() {}" } });
+  assert.equal(opened, undefined); assert.ok(reply.status.includes("No se encontró"));
 });

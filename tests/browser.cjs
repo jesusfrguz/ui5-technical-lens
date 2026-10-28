@@ -147,29 +147,33 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-source-status")?.textContent.includes("F12"));
     const queued = await worker.evaluate((tabId) => chrome.storage.session.get(`source:${tabId}`), tabId);
     assert.equal(queued[`source:${tabId}`].token, sourceButton.token);
-    // Run the shipped DevTools script with real extension messaging. The native
-    // inspectedWindow.eval transport is represented by CDP's Console Utility API.
+    // Verify popup/card messaging against actual loaded script sources; the
+    // separate devtools-browser test checks the native Sources cursor as well.
     const devtoolsPage = await context.newPage();
-    const inspectedFunctions = [];
-    cdp.on("Runtime.inspectRequested", (event) => inspectedFunctions.push(event.object));
-    await devtoolsPage.exposeBinding("__testDevtoolsEval", async (_, expression) => {
-      const response = await cdp.send("Runtime.evaluate", { expression, includeCommandLineAPI: true, returnByValue: true });
-      if (response.exceptionDetails) throw new Error(response.exceptionDetails.text);
-      return response.result.value;
+    const openedLocations = [];
+    await devtoolsPage.exposeBinding("__testResources", () => [...new Set(scripts.values())]);
+    await devtoolsPage.exposeBinding("__testResourceContent", async (_, url) => {
+      const scriptId = [...scripts].find(([, scriptURL]) => scriptURL === url)?.[0];
+      return scriptId ? (await cdp.send("Debugger.getScriptSource", { scriptId })).scriptSource : "";
     });
+    await devtoolsPage.exposeBinding("__testOpenResource", (_, location) => { openedLocations.push(location); });
     await devtoolsPage.addInitScript((id) => {
-      chrome.devtools = { inspectedWindow: { tabId: id, eval: (expression, settings, callback) => window.__testDevtoolsEval(expression, settings).then((value) => callback(value, null), (error) => callback(null, { description: error.message })) } };
+      chrome.devtools = { inspectedWindow: { tabId: id,
+        getResources: (callback) => window.__testResources().then((urls) => callback(urls.map((url) => ({ url, getContent: (callback) => window.__testResourceContent(url).then((source) => callback(source, "")) })))) },
+        panels: { openResource: (url, line, column, callback) => window.__testOpenResource({ url, line, column }).then(() => callback()) } };
     }, tabId);
     await devtoolsPage.goto(`chrome-extension://${extensionId}/devtools.html`);
-    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-source-status")?.textContent.includes("línea real"));
-    assert.equal(inspectedFunctions.at(-1)?.type, "function", "DevTools inspects the function without invoking it");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-source-status")?.textContent.includes("Ubicación enviada"));
+    assert.ok(openedLocations.at(-1)?.url.endsWith("/controller/Main.controller.js"));
+    assert.ok(fs.readFileSync(path.join(root, "demo/controller/Main.controller.js"), "utf8").split(/\r?\n/)[openedLocations.at(-1).line].includes("onCustomerChange"));
     assert.equal(await page.getByRole("dialog").count(), 0, "Inspecting valueHelpRequest doesn't open the app dialog");
     await popup.locator("#search").fill("onLoadDetails");
     const popupEvent = popup.locator(".file").filter({ has: popup.locator(".key.event") }).first();
     await popupEvent.locator("summary").click();
     await popupEvent.getByRole("button", { name: "Ver función en DevTools" }).click();
-    await popup.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((node) => node.textContent.includes("línea real")));
-    assert.ok(inspectedFunctions.length >= 2, "Popup and pinned card both navigate through the real background connection");
+    await popup.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((node) => node.textContent.includes("Ubicación enviada")));
+    assert.ok(openedLocations.length >= 2, "Popup and pinned card both navigate through the real background connection");
+    assert.ok(fs.readFileSync(path.join(root, "demo/controller/Main.controller.js"), "utf8").split(/\r?\n/)[openedLocations.at(-1).line].includes("onLoadDetails"));
     const invalidSource = await popup.evaluate((tabId) => chrome.runtime.sendMessage({ channel: "ui5-lens", action: "openHandler", tabId, frameId: 0, token: `h${"a".repeat(32)}_99999` }), tabId);
     assert.ok(invalidSource.error.includes("no está disponible"));
     await popup.locator("#search").fill("");

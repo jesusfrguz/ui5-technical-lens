@@ -85,7 +85,7 @@ test("extension manifest references packaged scripts and icon assets", () => {
   const root = path.resolve(__dirname, "..");
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
   assert.equal(manifest.manifest_version, 3);
-  const resources = [manifest.action.default_popup, manifest.devtools_page, "devtools.js", manifest.background.service_worker, ...Object.values(manifest.icons), ...manifest.content_scripts.flatMap((s) => s.js)];
+  const resources = [manifest.action.default_popup, manifest.devtools_page, "devtools.js", "source-locator.js", "vendor/acorn.js", "vendor/acorn.LICENSE", manifest.background.service_worker, ...Object.values(manifest.icons), ...manifest.content_scripts.flatMap((s) => s.js)];
   for (const file of resources) assert.ok(fs.existsSync(path.join(root, file)), file);
   assert.ok(manifest.content_scripts.some((script) => script.world === "MAIN" && script.run_at === "document_start" && script.all_frames));
 });
