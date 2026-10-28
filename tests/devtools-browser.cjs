@@ -49,16 +49,16 @@ const server = http.createServer((request, response) => {
       const state = frame.textEditor.state, head = state.selection.main.head, line = state.doc.lineAt(head);
       return { url: frame.uiSourceCode().url(), line: line.number, column: head - line.from, text: line.text };
     })()`);
-    async function request(frame, controller, method, expected) {
-      const token = await frame.evaluate(({ controller, method }) => {
+    async function request(frame, controller, method, expected, bound = false) {
+      const token = await frame.evaluate(({ controller, method, bound }) => {
         const value = window[controller]; value.getMetadata = () => ({ getName: () => controller });
         window.sap = { ui: { require: Object.assign(() => null, { toUrl: (path) => new URL(path, location.href).href }) } };
-        const entry = window.__UI5_TECH_LENS_EVENTS__.inspect({ getMetadata: () => ({ getAllEvents: () => ({ press: {} }) }), mEventRegistry: { press: [{ fFunction: value[method], oListener: value }] } },
+        const entry = window.__UI5_TECH_LENS_EVENTS__.inspect({ getMetadata: () => ({ getAllEvents: () => ({ press: {} }) }), mEventRegistry: { press: [{ fFunction: bound ? value[method].bind(value) : value[method], oListener: bound ? undefined : value }] } },
           { controller: value, controllers: [{ name: controller, path: `${controller}.controller.js` }] })[0].handlers[0];
         window.__sourceResults = [];
         if (!window.__watchSource) { window.__watchSource = true; window.addEventListener("message", (event) => { if (event.source === window && event.data?.channel === "ui5-lens:source-result") window.__sourceResults.push(event.data); }); }
         window.postMessage({ channel: "ui5-lens:source-request", token: entry.token }, "*"); return entry.token;
-      }, { controller, method });
+      }, { controller, method, bound });
       await frame.waitForFunction((token) => window.__sourceResults.some((result) => result.token === token && result.status.includes("Ubicación enviada")), token, { timeout: 15000 });
       let actual;
       const selected = (value) => value?.url === `${url}/${controller}.controller.js` &&
@@ -73,6 +73,7 @@ const server = http.createServer((request, response) => {
       console.log(`Native Sources: ${controller}.${method} → ${actual.url}:${actual.line}:${actual.column + 1}`);
     }
     await request(page, "A", "onAction", { line: 3, column: 12 });
+    await request(page, "A", "onAction", { line: 3, column: 12 }, true);
     await request(page, "B", "onAction", { line: 3, column: 12 });
     await request(page, "B", "second", { line: 7, column: 10 });
     await request(page, "Inline", "onAction", { line: 1, column: sources["/Inline.controller.js"].indexOf("function(e){return e+2}"), formatted: true });
