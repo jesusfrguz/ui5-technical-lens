@@ -4,6 +4,7 @@
 - Lee en la pestaña inspeccionada el título, la URL, la versión de UI5, el identificador/título del componente, los nombres técnicos y los IDs de controles para mostrarlos localmente.
 - Con los flags de modelos/OData activos, lee nombres y tipos de modelos, bindings, rutas, contextos y URLs de servicio ya presentes en el cliente. No lee valores de datos del modelo ni campos. Las rutas de contexto pueden contener claves de entidad. Los servicios se muestran sin credenciales, query ni fragmento URL.
 - La inspección de bindings no solicita datos ni metadatos OData adicionales y no refresca modelos.
+- El flag de controladores consulta nombres, metadatos, asociaciones con vistas/fragmentos y nombres de módulos ya cargados. No descarga el código de los controladores ni invoca sus handlers.
 - Guarda únicamente las opciones booleanas de visualización por ID de pestaña en `chrome.storage.session`. No guarda URLs, manifiestos, nombres técnicos, datos de negocio, formularios ni credenciales en el almacenamiento de la extensión.
 - Los controles y nombres de fragmentos capturados se mantienen en memoria en el contexto de la página, hasta su destrucción o recarga. La app puede acceder a ese contexto y modificarlo; es una herramienta de desarrollo, no una frontera de seguridad.
 - **Copiar ruta** escribe en el portapapeles la información técnica seleccionada. **Copiar todo** en una tarjeta fijada copia sus detalles de modelos y bindings. También puedes seleccionar texto y copiarlo con Ctrl+C. Ninguna de estas acciones envía datos fuera del navegador.

@@ -2,9 +2,9 @@
 const $ = (id) => document.getElementById(id);
 let tabId, tabTitle = "", frames = [], rows = [], options = {}, busy = false, updating = false;
 let renderedInventory = "";
-const optionKeys = ["enabled", "views", "fragments", "models", "odatas", "compact"];
-const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas" };
-const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O" };
+const optionKeys = ["enabled", "views", "fragments", "models", "odatas", "controllers", "compact"];
+const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas", controller: "controllers" };
+const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O", controller: "C" };
 function message(text, error = false) { $("message").textContent = text; $("message").className = error ? "error" : ""; }
 async function background(action, extra = {}) {
   const response = await chrome.runtime.sendMessage({ channel: "ui5-lens", action, tabId, ...extra });
@@ -12,7 +12,7 @@ async function background(action, extra = {}) {
   return response;
 }
 async function inject() {
-  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN", files: ["core.js", "data-inspector.js", "inspector.js"] });
+  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN", files: ["core.js", "data-inspector.js", "controller-inspector.js", "inspector.js"] });
   await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["bridge.js"] });
 }
 async function inspect() {
@@ -37,14 +37,14 @@ async function inspect() {
   $("app-component").textContent = app?.component && app.component !== app.id ? `Componente: ${app.component}` : "";
   $("reload").disabled = !frames.length;
   if (!frames.length) message("Abre una aplicación SAPUI5/OpenUI5 y actualiza la detección. Si todavía está cargando, espera unos segundos.");
-  else if (options.enabled) message(options.models || options.odatas ? "Señala un elemento y pulsa Alt para fijar su tarjeta y copiar. Alt o Esc la cierran por separado." : "Etiquetas activas · V: vistas · F: fragmentos.");
+  else if (options.enabled) message(options.models || options.odatas || options.controllers ? "Señala un elemento y pulsa Alt para fijar su tarjeta y copiar. Alt o Esc la cierran por separado." : "Etiquetas activas · V: vistas · F: fragmentos.");
   else message("Superposición desactivada. Actívala para identificar los elementos.");
   render();
 }
 function render() {
   const query = $("search").value.trim().toLowerCase();
   const filtered = rows.filter((entry) => options[kindOption[entry.kind]] &&
-    `${entry.name} ${entry.path} ${entry.ids.join(" ")} ${entry.scope || ""} ${JSON.stringify(entry.models || [])}`.toLowerCase().includes(query));
+    `${entry.name} ${entry.path} ${entry.ids.join(" ")} ${entry.scope || ""} ${JSON.stringify(entry.models || [])} ${JSON.stringify(entry.controllers || [])}`.toLowerCase().includes(query));
   const signature = JSON.stringify(filtered);
   if (signature === renderedInventory) return;
   renderedInventory = signature;
@@ -63,10 +63,17 @@ function render() {
     body.className = "file-body";
     const name = document.createElement("div"), path = document.createElement("div"), meta = document.createElement("div");
     const dataEntry = entry.kind === "model" || entry.kind === "odata";
-    name.className = "file-name"; name.textContent = dataEntry ? `${entry.controlType.split(".").pop()} · ${entry.ids[0]}` : entry.path.split("/").pop();
+    name.className = "file-name"; name.textContent = entry.kind === "controller" ? `${entry.scope.split("/").pop()} → controlador` : dataEntry ? `${entry.controlType.split(".").pop()} · ${entry.ids[0]}` : entry.path.split("/").pop();
     path.className = "file-path"; path.textContent = entry.path;
     meta.className = "file-meta"; meta.textContent = `${entry.visible ? "Visible" : "Fuera de pantalla / sin DOM"} · ${entry.source}${entry.frameId ? ` · iframe ${entry.frameId}` : ""}`;
     body.title = entry.ids.join("\n"); body.append(name, path, meta);
+    if (entry.kind === "controller") {
+      const details = document.createElement("details"), summary = document.createElement("summary"), info = document.createElement("div");
+      summary.textContent = "Controladores asociados"; info.className = "binding-details";
+      info.textContent = [`Vista / fragmento: ${entry.scope}`, `Asociación: ${entry.association}`, entry.ownerView ? `Vista: ${entry.ownerView}` : "",
+        ...entry.controllers.map((controller) => `${controller.name} · ${controller.role}\n${controller.path}\nRuta: ${controller.pathSource}`), entry.controllers.length ? "" : entry.controllerStatus].filter(Boolean).join("\n\n");
+      details.append(summary, info); body.append(details);
+    }
     if (dataEntry) {
       const details = document.createElement("details"), summary = document.createElement("summary"), info = document.createElement("div");
       summary.textContent = "Modelos y bindings"; info.className = "binding-details";

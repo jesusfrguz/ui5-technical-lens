@@ -3,35 +3,43 @@
   if (window.__UI5_TECH_LENS__) return;
   const H = window.__UI5_TECH_LENS_CORE__;
   const D = window.__UI5_TECH_LENS_DATA__;
+  const C = window.__UI5_TECH_LENS_CONTROLLERS__;
   let preferences = H.options(), host, layer, hoverLayer, observer, timer, runtimeTimer, frameRequest, hoverRequest, lastScan = 0;
   let pointer = null, dismissedNode = null, activeHoverNode = null;
   let pinned = null, handledAlt = false, handledEscape = false;
   let dataTargets = new Map();
   let entries = [], controls = [], hooksInstalled = false, loadingModules = false, selected = "";
-  const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas" };
-  const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O" };
+  const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas", controller: "controllers" };
+  const kindLetter = { view: "V", fragment: "F", model: "M", odata: "O", controller: "C" };
+  const inspectionEnabled = () => preferences.models || preferences.odatas || preferences.controllers;
+  const inspectionOptions = () => `${preferences.models}:${preferences.odatas}:${preferences.controllers}`;
   const fragments = new Map(), wrappers = new WeakSet();
   const safe = (fn, fallback = null) => { try { return fn() ?? fallback; } catch { return fallback; } };
   const moduleValue = (name) => safe(() => window.sap?.ui?.require?.(name));
   const isView = (control) => safe(() => control.isA("sap.ui.core.mvc.View"), false);
   const controlId = (control) => safe(() => control.getId(), "");
 
-  function remember(content, name, type, source = "capturado") {
+  function remember(content, name, type, source = "capturado", context = {}) {
     if (typeof name !== "string" || !name) return;
     const roots = (Array.isArray(content) ? content : [content]).filter((c) => c && typeof c.getId === "function");
     if (!roots.length) return;
     const key = `${name}|${roots.map(controlId).sort().join("|")}`;
-    fragments.set(key, { key, name, type: type || "XML", roots, source });
+    const previous = fragments.get(key);
+    fragments.set(key, { ...previous, key, name, type: type || "XML", roots, source,
+      controllerKnown: context.controllerKnown || previous?.controllerKnown || false,
+      controller: context.controllerKnown ? context.controller : previous?.controller,
+      containingView: context.containingView || previous?.containingView });
     schedule(true);
   }
 
-  function wrap(target, key, after) {
+  function wrap(target, key, after, before) {
     const original = target?.[key];
     if (typeof original !== "function" || wrappers.has(original)) return false;
     function instrumented(...args) {
+      const context = safe(() => before?.call(this, args));
       const result = Reflect.apply(original, this, args);
       // Instrumentation must preserve the original return value, promise and exceptions.
-      safe(() => after.call(this, args, result));
+      safe(() => after.call(this, args, result, context));
       return result;
     }
     wrappers.add(instrumented);
@@ -48,13 +56,18 @@
       // The async factory supplies both fragmentName and its resolved XML content.
       const name = settings?.fragmentName;
       if (!name) return;
+      const controller = safe(() => this.getController()) || this.oController || settings.oController;
+      const context = { controller, controllerKnown: Boolean(controller) || settings.oController === null, containingView: settings.containingView };
       if (this._pContentPromise?.then) {
-        this._pContentPromise.then((content) => safe(() => remember(content, name, settings.type)), () => {});
-      } else remember(this._aContent, name, settings.type);
+        this._pContentPromise.then((content) => safe(() => remember(content, name, settings.type, "capturado", context)), () => {});
+      } else remember(this._aContent, name, settings.type, "capturado", context);
     });
-    const publicHook = wrap(Fragment, "load", function ([settings], result) {
-      const name = settings?.definition ? null : (settings?.name || settings?.fragmentName);
-      if (name && result?.then) result.then((content) => safe(() => remember(content, name, settings.type)), () => {});
+    const publicHook = wrap(Fragment, "load", function ([settings], result, context) {
+      if (context?.name && result?.then) result.then((content) => safe(() => remember(content, context.name, context.type, "capturado", context)), () => {});
+    }, function ([settings]) {
+      return { name: settings?.definition ? null : settings?.name || settings?.fragmentName, type: settings?.type,
+        controller: settings?.controller ?? settings?.oController,
+        controllerKnown: settings?.controller !== undefined || settings?.oController !== undefined };
     });
     hooksInstalled = hooksInstalled || internal || publicHook;
   }
@@ -144,6 +157,7 @@
       record.roots = roots;
       next.push({ ...record, key: `fragment:${key}`, kind: "fragment", path: H.path(record.name, "fragment", record.type) });
     }
+    const sourceEntries = [...next];
     if (preferences.models || preferences.odatas) {
       const sources = new Map();
       for (const entry of next) for (const control of entry.roots) sources.set(control, entry.path);
@@ -173,9 +187,16 @@
         }
       }
     }
+    if (preferences.controllers) for (const source of sourceEntries) {
+      const info = C.inspect(source);
+      next.push({ key: `controller:${source.key}`, kind: "controller", name: source.name,
+        path: info.controllers.map((controller) => controller.path).join("\n") || info.controllerStatus,
+        source: info.association, roots: source.roots, scope: source.path, scopeKind: source.kind,
+        controlType: safe(() => source.roots[0].getMetadata().getName(), "Control"), models: [], bindings: [], ...info });
+    }
     entries = next;
     dataTargets = new Map();
-    for (const entry of entries.filter((item) => item.kind === "model" || item.kind === "odata")) {
+    for (const entry of entries.filter((item) => ["model", "odata", "controller"].includes(item.kind))) {
       for (const node of entry.roots.flatMap(domRoots)) {
         if (!dataTargets.has(node)) dataTargets.set(node, []);
         dataTargets.get(node).push(entry);
@@ -198,6 +219,7 @@
     hoverLayer = document.createElement("div");
     style.textContent += `.hover-outline{position:fixed;box-sizing:border-box;border:2px solid #168469;border-radius:5px;background:#16846909;pointer-events:none}.hover-outline.odata{border-color:#af580d}.hover-card{position:fixed;box-sizing:border-box;background:#fff;color:#173247;border:1px solid #d8e5eb;border-top:3px solid #168469;border-radius:10px;box-shadow:0 8px 30px #17324735;padding:13px 15px;font:12px/1.5 Segoe UI,system-ui,sans-serif;pointer-events:none;overflow:hidden;overflow-wrap:anywhere}.hover-card.odata{border-top-color:#af580d}.hover-heading{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:#11835e;font-weight:700}.hover-card.odata .hover-heading{color:#af580d}.hover-name{font-size:14px;font-weight:700;margin:4px 0}.hover-id,.hover-scope{font:10px/1.5 Consolas,monospace;color:#758a98}.hover-section{margin-top:10px;padding-top:8px;border-top:1px solid #e6edf1}.hover-section-title{font-weight:600;font-size:11px;margin-bottom:5px}.hover-row{margin:5px 0;color:#436170;font-size:11px}.hover-row strong{color:#173247}.hover-row code{display:block;font:10px/1.5 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:#31566b}.hover-note{margin-top:10px;font-size:10px;color:#7a8c99}`;
     style.textContent += `.hover-card.pinned{pointer-events:auto!important;user-select:text!important;overflow:auto;overscroll-behavior:contain;outline:none}.hover-card.pinned ::selection{background:#bfe8f4;color:#173247}.hover-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px;padding-bottom:9px;border-bottom:1px solid #e6edf1;font-size:10px;color:#687f8c;user-select:none}.hover-copy{font:600 11px Segoe UI,system-ui,sans-serif;padding:6px 10px;border:1px solid #c8dce5;border-radius:6px;background:#edf6f9;color:#235b70;cursor:pointer}.hover-copy:focus-visible{outline:2px solid #168469;outline-offset:2px}`;
+    style.textContent += `.hover-card.controller{border-top-color:#5656b8}.hover-card.controller .hover-heading{color:#5656b8}.hover-outline.controller{border-color:#5656b8}`;
     shadow.append(style, layer, hoverLayer);
     document.documentElement.append(host);
   }
@@ -248,26 +270,38 @@
 
   function hoveredData() {
     // "Locate" from the popup also previews the data, even without a pointer.
-    const located = entries.find((entry) => entry.key === selected && (entry.kind === "model" || entry.kind === "odata") && preferences[kindOption[entry.kind]]);
+    const located = entries.find((entry) => entry.key === selected && ["model", "odata", "controller"].includes(entry.kind) && preferences[kindOption[entry.kind]]);
     if (located) {
       const node = located.roots.flatMap(domRoots).find((item) => visibleRect(item));
       if (node) return { node, items: dataTargets.get(node) || [located], located: true };
     }
     if (!pointer) return null;
     let node = document.elementFromPoint(pointer.x, pointer.y);
+    let data = null, controller = null, passedControl = false;
     while (node && node !== host) {
       if (node.tagName === "IFRAME") return null; // the frame manages its own card
       const items = dataTargets.get(node);
-      if (items?.length) return node === dismissedNode ? null : { node, items };
+      if (!controller && preferences.controllers) {
+        const matches = items?.filter((entry) => entry.kind === "controller");
+        const item = matches?.find((entry) => entry.scopeKind === "fragment") || matches?.[0];
+        if (item) controller = { node, items: [item] };
+      }
+      if (!data && !passedControl) {
+        const matches = items?.filter((entry) => entry.kind !== "controller");
+        if (matches?.length) data = { node, items: matches };
+      }
       // Don't attribute an unbound field/button to a bound ancestor window.
-      if (node.hasAttribute("data-sap-ui")) return null;
+      if (node.hasAttribute("data-sap-ui")) passedControl = true;
+      if (!preferences.controllers && passedControl) break;
       node = node.parentElement;
     }
-    return null;
+    const target = data || controller;
+    if (!target || target.node === dismissedNode) return null;
+    return { node: target.node, items: [...(data?.items || []), ...(controller?.items || [])] };
   }
   function renderHover() {
     if (!hoverLayer) return;
-    if (pinned && (!preferences.enabled || pinned.options !== `${preferences.models}:${preferences.odatas}`)) releasePinned(false);
+    if (pinned && (!preferences.enabled || pinned.options !== inspectionOptions())) releasePinned(false);
     // Keep a pinned DOM intact: replacing it would erase the user's selection.
     if (pinned?.card?.isConnected) {
       const rect = visibleRect(pinned.node);
@@ -281,7 +315,7 @@
       return;
     }
     hoverLayer.replaceChildren(); activeHoverNode = null;
-    if (!preferences.enabled || (!preferences.models && !preferences.odatas)) return;
+    if (!preferences.enabled || !inspectionEnabled()) return;
     const hovered = pinned || hoveredData();
     if (!hovered) return;
     const rect = visibleRect(hovered.node);
@@ -291,10 +325,12 @@
     activeHoverNode = hovered.node;
     const entry = items.find((item) => item.kind === "model") || items[0];
     const odata = items.some((item) => item.kind === "odata");
+    const controllerItems = items.filter((item) => item.kind === "controller");
+    const controllerOnly = items.every((item) => item.kind === "controller");
     const outline = document.createElement("div"), card = document.createElement("div");
-    outline.className = `hover-outline${odata ? " odata" : ""}`;
+    outline.className = `hover-outline${odata ? " odata" : controllerOnly ? " controller" : ""}`;
     outline.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
-    card.className = `hover-card${odata ? " odata" : ""}${pinned ? " pinned" : ""}`;
+    card.className = `hover-card${odata ? " odata" : controllerOnly ? " controller" : ""}${pinned ? " pinned" : ""}`;
     card.dataset.controlId = controlId(entry.roots[0]);
     const add = (parent, tag, className, text) => {
       const element = document.createElement(tag); element.className = className; element.textContent = text; parent.append(element); return element;
@@ -311,8 +347,9 @@
       card.prepend(actions); card.tabIndex = 0; card.setAttribute("role", "region"); card.setAttribute("aria-label", "Inspector de modelos y OData fijado");
       for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "wheel"]) card.addEventListener(type, (event) => event.stopPropagation());
     }
-    add(content, "div", "hover-heading", items.length > 1 ? "Modelos y OData" : odata ? "OData" : "Modelos");
-    add(content, "div", "hover-name", entry.controlType.split(".").pop());
+    const headings = [items.some((item) => item.kind === "model") ? "Modelos" : "", odata ? "OData" : "", controllerItems.length ? "Controladores" : ""].filter(Boolean);
+    add(content, "div", "hover-heading", headings.join(headings.length === 2 ? " y " : " · "));
+    add(content, "div", "hover-name", controllerOnly ? entry.scope.split("/").pop() : entry.controlType.split(".").pop());
     add(content, "div", "hover-id", card.dataset.controlId);
     if (entry.scope) add(content, "div", "hover-scope", entry.scope);
     let omitted = 0;
@@ -342,6 +379,20 @@
       }
       omitted += Math.max(0, entry.models.length - 4);
     }
+    for (const association of controllerItems) {
+      const section = add(content, "div", "hover-section", "");
+      add(section, "div", "hover-section-title", "Controladores asociados");
+      add(section, "div", "hover-row", `${association.scope} · ${association.association}`);
+      if (association.ownerView) add(section, "div", "hover-scope", `Vista: ${association.ownerView}`);
+      if (!association.controllers.length) add(section, "div", "hover-row", association.controllerStatus);
+      for (const controller of pinned ? association.controllers : association.controllers.slice(0, 4)) {
+        const row = add(section, "div", "hover-row", "");
+        add(row, "strong", "", `${controller.name} · ${controller.role}`);
+        add(row, "code", "", controller.path);
+        if (pinned) add(row, "code", "", `Ruta: ${controller.pathSource}`);
+      }
+      omitted += Math.max(0, association.controllers.length - 4);
+    }
     add(card, "div", "hover-note", pinned ? "Selecciona el texto y usa Ctrl+C · Ctrl+A selecciona el contenido de esta tarjeta" : `${omitted ? `+${omitted} detalles · ` : ""}Alt para fijar y copiar · Alt o Esc para cerrar`);
     const margin = 12, width = Math.max(0, Math.min(460, innerWidth - margin * 2));
     card.style.width = `${width}px`;
@@ -370,11 +421,11 @@
     finally { textarea.remove(); pinned?.card?.focus({ preventScroll: true }); }
   }
   function pinHovered() {
-    if (pinned || !preferences.enabled || (!preferences.models && !preferences.odatas)) return Boolean(pinned);
+    if (pinned || !preferences.enabled || !inspectionEnabled()) return Boolean(pinned);
     dismissedNode = null; // An explicit Alt press may reopen a card closed by Esc.
     const hovered = hoveredData();
     if (!hovered || !visibleRect(hovered.node)) return false;
-    pinned = { ...hovered, options: `${preferences.models}:${preferences.odatas}`, previousFocus: document.activeElement };
+    pinned = { ...hovered, options: inspectionOptions(), previousFocus: document.activeElement };
     renderHover();
     return Boolean(pinned?.card);
   }
@@ -394,7 +445,7 @@
   }
   function onPointerMove(event) {
     if (pinned) return;
-    if (event.pointerType === "touch" || (!preferences.models && !preferences.odatas)) return;
+    if (event.pointerType === "touch" || !inspectionEnabled()) return;
     pointer = { x: event.clientX, y: event.clientY };
     if (dismissedNode && !dismissedNode.contains(event.target)) dismissedNode = null;
     queueHover();
@@ -416,7 +467,7 @@
     }
     const inCard = pinned?.card && (event.composedPath().includes(pinned.card) || pinned.card.contains(pinned.card.getRootNode().activeElement));
     if (inCard) event.stopPropagation();
-    if (event.key === "Alt" && !event.repeat && !event.ctrlKey && !event.metaKey && preferences.enabled && (preferences.models || preferences.odatas)) {
+    if (event.key === "Alt" && !event.repeat && !event.ctrlKey && !event.metaKey && preferences.enabled && inspectionEnabled()) {
       handledAlt = true; event.preventDefault();
       window.postMessage({ channel: "ui5-lens:hover-request", command: "toggle" }, "*");
     }
@@ -491,6 +542,8 @@
       options: preferences, tracking: hooksInstalled, apps,
       entries: entries.map((entry) => ({ key: entry.key, kind: entry.kind, name: entry.name, path: entry.path, source: entry.source,
         controlType: entry.controlType, scope: entry.scope, models: entry.models, bindings: entry.bindings,
+        scopeKind: entry.scopeKind, controllers: entry.controllers, controllerStatus: entry.controllerStatus,
+        association: entry.association, ownerView: entry.ownerView, ownerViewId: entry.ownerViewId,
         ids: entry.roots.map(controlId), visible: entry.roots.flatMap(domRoots).some((node) => Boolean(visibleRect(node))) }))
     };
   }

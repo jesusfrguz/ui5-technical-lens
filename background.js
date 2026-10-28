@@ -1,5 +1,5 @@
 "use strict";
-const defaults = { enabled: false, views: true, fragments: true, models: false, odatas: false, compact: false };
+const defaults = { enabled: false, views: true, fragments: true, models: false, odatas: false, controllers: false, compact: false };
 const stateKey = (tabId) => `tab:${tabId}`;
 // Serialize writes: popup changes and newly loaded frames must see one consistent state.
 let writes = Promise.resolve();

@@ -11,3 +11,4 @@
 .file summary{cursor:pointer}
 .binding-details{font:10px/1.6 Consolas,monospace;overflow-wrap:anywhere;margin-top:7px}
 footer .green{background:#11835e}footer .orange{background:#af580d}
+.controller{color:#5656b8;background:#ededfb}.controller-filters{margin-top:10px}.controller-filters>span{margin-left:auto;font-size:9px;color:#85949f}

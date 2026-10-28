@@ -1,7 +1,7 @@
 /* Shared, dependency-free helpers. No UI5 modules are loaded here. */
 (() => {
   "use strict";
-  const defaults = Object.freeze({ enabled: false, views: true, fragments: true, models: false, odatas: false, compact: false });
+  const defaults = Object.freeze({ enabled: false, views: true, fragments: true, models: false, odatas: false, controllers: false, compact: false });
   function options(input = {}) {
     input = input || {};
     return Object.fromEntries(Object.entries(defaults).map(([key, value]) =>
@@ -24,7 +24,13 @@
     const right = Math.min(a.right, b.right), bottom = Math.min(a.bottom, b.bottom);
     return right > left && bottom > top ? { left, top, right, bottom, width: right - left, height: bottom - top } : null;
   }
-  const api = Object.freeze({ defaults, options, path, intersect });
+  function controllerPath(name) {
+    if (!name || typeof name !== "string") return "";
+    if (name.startsWith("module:")) return /\.js$/.test(name) ? name.slice(7) : `${name.slice(7)}.js`;
+    const base = name.replace(/\.controller\.js$/, "");
+    return `${base.replace(/\./g, "/")}.controller.js`;
+  }
+  const api = Object.freeze({ defaults, options, path, controllerPath, intersect });
   if (typeof module === "object" && module.exports) module.exports = api;
   else if (!window.__UI5_TECH_LENS_CORE__) Object.defineProperty(window, "__UI5_TECH_LENS_CORE__", { value: api, configurable: true });
 })();

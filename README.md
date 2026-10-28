@@ -4,9 +4,9 @@ Extensión de Chrome (Manifest V3) que muestra los ficheros técnicos de las vis
 
 Creada por **Jesús Franco Guzmán** · [LinkedIn](https://es.linkedin.com/in/jesus-franco-guzman).
 
-[Descargar la extensión 1.3.1 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.3.1.zip).
+[Descargar la extensión 1.4.0 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.4.0.zip).
 
-La versión **1.3.1** permite fijar la tarjeta de modelos/OData con **Alt**, sin hacer clic en el elemento de la app. Una vez fijada, puedes seleccionar y copiar su contenido. **Alt o Esc** la cierran de forma independiente. Las etiquetas de vistas y fragmentos conservan su visualización permanente. Para actualizar una instalación descomprimida, sustituye sus archivos por los del ZIP nuevo, pulsa **Recargar** en su tarjeta de `chrome://extensions` y recarga la app para renovar los scripts ya inyectados.
+La versión **1.4.0** incorpora el flag **Controladores**, que identifica el controlador y sus recursos asociados a cada vista o fragmento. Utiliza la misma tarjeta al pasar el ratón: **Alt** la fija para seleccionar y copiar; **Alt o Esc** la cierran de forma independiente. Para actualizar una instalación descomprimida, sustituye sus archivos por los del ZIP nuevo, pulsa **Recargar** en su tarjeta de `chrome://extensions` y recarga la app para renovar los scripts ya inyectados.
 
 ## Vista de ejemplo
 
@@ -30,6 +30,7 @@ Chrome no instala este ZIP directamente ni requiere generar un CRX. Para instala
 - **Mostrar nombres técnicos** activa/desactiva la superposición en la pestaña actual.
 - **Vistas**: bordes azules y rutas como `mi/app/view/Main.view.xml`.
 - **Fragmentos**: bordes violetas discontinuos como `mi/app/fragment/Filters.fragment.xml`.
+- **Controladores**: muestra el controlador asociado a cada vista o fragmento, con nombre, ruta técnica, vista de origen y tipo de asociación. Funciona de forma independiente de los flags de vistas, fragmentos, modelos y OData. Los resultados aparecen en el panel con la marca **C**, se pueden buscar por nombre/ruta y se muestran al señalar los elementos de la vista o fragmento. Alt fija la tarjeta para copiar todos sus detalles.
 - **Modelos**: activa una tarjeta al pasar el ratón sobre una vista/ventana o campo con información de modelo. Incluye modelo por defecto y modelos con nombre, tipo, propiedad, ruta relativa, contexto y ruta resuelta. No añade etiquetas permanentes a todos los campos.
 - **OData**: activa la información OData V2/V4 al pasar el ratón, con modelo, servicio y origen `dataSource` en el detalle del panel cuando está disponible. Es independiente del flag de modelos. Al activar ambos, se muestra una única tarjeta del elemento señalado.
 - Solo se resalta el elemento bajo el ratón. La tarjeta cambia al moverte a otro control y desaparece al salir de él o de la página. Los campos sin binding/modelo propio no se atribuyen al modelo de su ventana. Durante la inspección normal, la tarjeta deja pasar los clics y se coloca dentro de la ventana del navegador.
@@ -54,6 +55,10 @@ La inspección usa metadatos de binding/modelo del cliente: no lee valores de ca
 Se usan APIs públicas de bindings y modelos; para enumerar nombres de modelos se consultan de forma defensiva los mapas internos `oModels` y `oPropagatedProperties.oModels`, porque no existe una enumeración pública universal en todas las versiones. OData V2 puede requerir leer `sServiceUrl`; V4 utiliza `getServiceUrl()` si está disponible. Un cambio interno de UI5 puede requerir adaptar estas lecturas. Al inspeccionar listas muy grandes, conviene activar únicamente el tipo de etiqueta necesario.
 
 ## Detección y límites
+
+Los controladores de las vistas se obtienen de su instancia real mediante `getController()` y sus metadatos. Para fragmentos se conserva el controlador recibido durante su creación, incluidos `Controller.loadFragment()` y fragmentos declarativos; si falta esa información se consulta la vista contenedora más cercana. Un fragmento no tiene un controlador propio de MVC. Si recibe un objeto anónimo de handlers, o no hay controlador, se indica expresamente y no se inventa un fichero.
+
+También se muestran clases base y extensiones de controlador que estén identificadas en el runtime. Se consultan módulos ya cargados para reconocer tanto `Main.controller.js` como archivos base o extensiones que usen `.js`. Cuando solo se puede derivar una ruta del namespace, se marca **convención UI5** en el detalle. Son rutas lógicas de recursos; no se descargan ni se ejecutan los archivos para inspeccionarlos. La lectura opcional de extensiones usa el mapa interno `_sapui_Extensions` de forma defensiva; extensiones anónimas o cargadores personalizados pueden no ofrecer un nombre recuperable.
 
 Las vistas se descubren en el registro de controles de UI5 y se identifican con `getViewName()`. También se consulta el componente propietario y su manifiesto para mostrar la app actual. Si no hay manifiesto accesible, se muestra el título de la página.
 
