@@ -4,9 +4,9 @@ Extensión de Chrome (Manifest V3) que muestra los ficheros técnicos de las vis
 
 Creada por **Jesús Franco Guzmán** · [LinkedIn](https://es.linkedin.com/in/jesus-franco-guzman).
 
-[Descargar la extensión 1.5.1 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.5.1.zip).
+[Descargar la extensión 1.5.2 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.5.2.zip).
 
-La versión **1.5.1** corrige **Ver función en DevTools**: resuelve el recurso cargado y la línea/columna del método y solicita esa posición explícitamente a Sources. También corrige la selección de iframes con la misma URL. **Alt** fija la tarjeta para seleccionar y copiar; **Alt o Esc** la cierran de forma independiente. Para actualizar, sustituye los archivos de la instalación descomprimida por los del ZIP nuevo, pulsa **Recargar** en `chrome://extensions`, recarga la app y cierra/vuelve a abrir DevTools.
+La versión **1.5.2** corrige el error `Extension context invalidated` al recargar la extensión con una app abierta y añade la búsqueda de métodos para listeners enlazados, como `bound onValueHelp`. Mantiene la navegación a fichero, línea y columna en DevTools. Para actualizar, sustituye los archivos de la instalación descomprimida por los del ZIP nuevo, pulsa **Recargar** en `chrome://extensions` o `edge://extensions`, recarga después la pestaña de la app y cierra/vuelve a abrir DevTools.
 
 ## Vista de ejemplo
 
@@ -71,6 +71,14 @@ Se lee defensivamente el registro interno `mEventRegistry` y los metadatos de ev
 
 En iframes se usa el ID del marco para recuperar la función, por lo que varias ventanas con exactamente la misma URL no se confunden. Una recarga invalida las referencias anteriores y requiere volver a señalar el control. Si no se encuentra el código, es nativo/bound o hay varias ubicaciones posibles, se indica el motivo y no se abre un archivo arbitrario. Los bundles se abren en la ubicación de la función dentro del recurso cargado. El formateo automático y los source maps de DevTools pueden cambiar las coordenadas visibles respecto al archivo original: el cursor se revela en la posición correspondiente.
 
+### Listeners enlazados con bind
+
+Un listener como `bound onValueHelp` oculta su función original al código JavaScript de la página. Si en los controladores asociados a la vista hay un único método efectivo con ese nombre, se ofrece ese método como candidato y se indica **asociado por nombre**. No se puede demostrar que sea el target interno de la función enlazada. Si varios controladores/extensiones tienen métodos distintos con el mismo nombre, no se selecciona uno automáticamente. No se invoca el evento ni se sustituye `Function.prototype.bind`.
+
+### Recargar la extensión con la app abierta
+
+Chrome/Edge invalida el contexto de los scripts antiguos al recargar o actualizar una extensión. La versión nueva captura tanto las excepciones síncronas de `sendMessage()` como los rechazos de su promesa y desconecta el puente caducado para no enviar comandos ni opciones antiguas. Eso no actualiza los scripts que ya estaban inyectados: **recarga también la pestaña de la app después de recargar la extensión**. Si el error procede del puente de una versión anterior que ya estaba en memoria, solo desaparecerá de esa página al recargarla; sustituir archivos no puede corregir código ya ejecutado.
+
 ## Detección y límites
 
 Los controladores de las vistas se obtienen de su instancia real mediante `getController()` y sus metadatos. Para fragmentos se conserva el controlador recibido durante su creación, incluidos `Controller.loadFragment()` y fragmentos declarativos; si falta esa información se consulta la vista contenedora más cercana. Un fragmento no tiene un controlador propio de MVC. Si recibe un objeto anónimo de handlers, o no hay controlador, se indica expresamente y no se inventa un fichero.
@@ -111,10 +119,11 @@ Abre `http://127.0.0.1:4173`. La demo necesita Internet para cargar SAPUI5 1.120
 npx playwright install chromium
 npm run test:browser
 npm run test:devtools
+npm run test:reload
 npm run package
 ```
 
-Las pruebas de navegador usan un perfil temporal aislado con la extensión real, sin modificar tu perfil personal de Chrome. Generan capturas en `test-results/`. El paquete de `dist` contiene únicamente los archivos necesarios para la extensión y su documentación; excluye la demo, las pruebas y las dependencias. `npm run test:devtools` abre el frontend real de DevTools en un navegador headless y verifica el archivo y la selección del editor Sources, incluyendo métodos homónimos, cuerpos idénticos, columnas minificadas, sourceURL e iframes de URL idéntica.
+Las pruebas de navegador usan un perfil temporal aislado con la extensión real, sin modificar tu perfil personal de Chrome. Generan capturas en `test-results/`. El paquete de `dist` contiene únicamente los archivos necesarios para la extensión y su documentación; excluye la demo, las pruebas y las dependencias. `npm run test:reload` recarga realmente el runtime de la extensión con una página abierta y comprueba que los mensajes del puente caducado no producen excepciones y que la comunicación funciona después de recargar la página. `npm run test:devtools` abre el frontend real de DevTools en un navegador headless y verifica el archivo y la selección del editor Sources, incluyendo métodos homónimos, cuerpos idénticos, columnas minificadas, sourceURL e iframes de URL idéntica.
 
 Si Windows bloquea el ejecutable descargado de Chromium, se puede usar Edge instalado para la misma prueba: `$env:UI5_TEST_BROWSER = 'msedge'; npm run test:browser`. La verificación realizada en este entorno usó Edge/Chromium con la extensión real y SAPUI5 1.120.x.
 

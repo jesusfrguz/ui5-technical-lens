@@ -3,6 +3,9 @@
 const SOURCES = globalThis.__UI5_TECH_LENS_SOURCES__;
 const validToken = (value) => typeof value === "string" && /^h[a-f0-9]{32}_\d+$/.test(value);
 let generation = 0;
+function available() {
+  try { return Boolean(chrome.runtime?.id); } catch { return false; }
+}
 const timed = (operation) => new Promise((resolve, reject) => {
   const timeout = setTimeout(() => reject(new Error("DevTools no respondió. Vuelve a abrirlo e inténtalo otra vez.")), 10000);
   operation((value) => { clearTimeout(timeout); resolve(value); }, (error) => { clearTimeout(timeout); reject(error); });
@@ -17,10 +20,12 @@ async function locate(value) {
   return SOURCES.locate(await read(candidates), value);
 }
 function connect() {
-  const port = chrome.runtime.connect({ name: "ui5-lens-devtools" });
+  if (!available()) return;
+  let port;
+  try { port = chrome.runtime.connect({ name: "ui5-lens-devtools" }); } catch { return; }
   const post = (message) => { try { port.postMessage(message); } catch { /* Worker reconnects for subsequent requests. */ } };
   post({ action: "connect", tabId: chrome.devtools.inspectedWindow.tabId });
-  port.onDisconnect.addListener(() => setTimeout(connect, 500));
+  port.onDisconnect.addListener(() => { generation++; if (available()) setTimeout(connect, 500); });
   port.onMessage.addListener(async (message) => {
     if (message.action !== "openHandler" || !validToken(message.token)) return;
     const request = ++generation;
@@ -31,9 +36,11 @@ function connect() {
       if (request !== generation) return;
       if (location.error) throw new Error(location.error);
       await timed((resolve, reject) => chrome.devtools.panels.openResource(location.url, location.line, location.column, (result) => {
-        const error = chrome.runtime.lastError;
-        if (error || result?.isError) reject(new Error(error?.message || result.description || "DevTools no pudo abrir el recurso."));
-        else resolve(true);
+        try {
+          const error = chrome.runtime.lastError;
+          if (error || result?.isError) reject(new Error(error?.message || result.description || "DevTools no pudo abrir el recurso."));
+          else resolve(true);
+        } catch (error) { reject(error); }
       }));
       if (request === generation) post({ action: "result", requestId: message.requestId,
         status: `Ubicación enviada a Sources: ${location.url.split("/").pop()} · línea ${location.line + 1}, columna ${location.column + 1}.` });

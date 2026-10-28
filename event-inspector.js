@@ -51,6 +51,21 @@
     // Never expose defaults, destructured values, function bodies or data literals.
     return args ? args.split(",").map((arg) => /^\s*(?:\.\.\.)?([\w$]+)\s*(?:=|$)/.exec(arg)?.[1] || "…").join(", ") : "sin argumentos";
   }
+  function boundMethod(registered, receivers) {
+    const registeredName = property(registered, "name") || "";
+    if (!registeredName.startsWith("bound ") || !safe(() => Function.prototype.toString.call(registered).includes("[native code]"), false)) return null;
+    const name = registeredName.replace(/^(?:bound\s+)+/, "");
+    if (!/^[\w$]+$/.test(name)) return null;
+    // A bound function hides its target and receiver from JavaScript. Recover a
+    // candidate only when the effective method in this view's controller scope
+    // is unique; don't invoke listeners, getters or override global bind().
+    const candidates = new Set();
+    for (const receiver of receivers) {
+      const fn = property(receiver, name);
+      if (typeof fn === "function" && fn !== registered && !safe(() => Function.prototype.toString.call(fn).includes("[native code]"), true)) candidates.add(fn);
+    }
+    return { name, fn: candidates.size === 1 ? [...candidates][0] : null, ambiguous: candidates.size > 1 };
+  }
   function inspect(control, context = {}) {
     const metadata = safe(() => control.getMetadata().getAllEvents(), {});
     const registry = property(control, "mEventRegistry") || {};
@@ -75,6 +90,9 @@
           const resolved = local ? resolvePath(receiver || controller, reference.replace(/^\./, "")) : resolvePath(window, reference);
           if (typeof resolved === "function" && reference !== declared) { fn = resolved; resolution = "método XML resuelto en el receptor actual"; }
         }
+        const bound = boundMethod(fn, [...new Set([receiver, ...receivers].filter(Boolean))]);
+        if (bound?.fn) { fn = bound.fn; resolution = "listener enlazado · método asociado por nombre en el controlador (no identidad del target)"; }
+        else if (bound?.ambiguous) resolution = "listener enlazado · varios métodos homónimos; target no recuperable";
         let owner, method = "";
         for (const candidate of [...new Set([receiver, ...receivers].filter(Boolean))]) {
           method = methodName(candidate, fn);
