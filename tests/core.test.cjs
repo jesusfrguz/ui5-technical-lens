@@ -44,8 +44,37 @@ test("technical resource names: XML, JS modules, explicit suffix, namespaces", (
   assert.equal(H.path(null, "view"), "Origen sin nombre");
 });
 test("only boolean, known options cross the page bridge", () => {
-  assert.deepEqual(H.options({ enabled: true, views: "false", fragments: false, extra: true }), { enabled: true, views: true, fragments: false, models: false, odatas: false, compact: false });
+  assert.deepEqual(H.options({ enabled: true, views: "false", fragments: false, extra: true }), { enabled: true, views: true, fragments: false, models: false, odatas: false, controllers: false, compact: false });
   assert.deepEqual(H.options(), H.defaults);
+});
+test("controller paths support namespaced, explicit-suffix and module syntax", () => {
+  assert.equal(H.controllerPath("demo.controller.Main"), "demo/controller/Main.controller.js");
+  assert.equal(H.controllerPath("demo.controller.Main.controller.js"), "demo/controller/Main.controller.js");
+  assert.equal(H.controllerPath("module:demo/controller/Typed"), "demo/controller/Typed.js");
+  assert.equal(H.controllerPath("module:demo/controller/Typed.controller.js"), "demo/controller/Typed.controller.js");
+});
+test("controllers resolve actual loaded base modules and do not attribute a view controller to plain fragment handlers", () => {
+  function Main() {} function Base() {} function Extension() {}
+  const builtin = { getName: () => "sap.ui.core.mvc.Controller" };
+  const base = { getName: () => "demo.controller.Base", getClass: () => Base, getParent: () => builtin };
+  const main = { getName: () => "demo.controller.Main", getClass: () => Main, getParent: () => base };
+  const controller = new Main(); controller.getMetadata = () => main;
+  controller._sapui_Extensions = { ext: { extension: { getMetadata: () => ({ getName: () => "demo.ext.Extension", getClass: () => Extension }) } } };
+  const view = { isA: (name) => name === "sap.ui.core.mvc.View", getController: () => controller, getViewName: () => "demo.view.Main", getId: () => "view" };
+  controller.getView = () => view;
+  const modules = { "demo/controller/Main.controller": Main, "demo/controller/Base": Base, "demo/ext/Extension": Extension };
+  const context = { __UI5_TECH_LENS_CORE__: H, sap: { ui: { require: (name) => modules[name] } } }; context.window = context;
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, "../controller-inspector.js"), "utf8"), context);
+  const C = context.__UI5_TECH_LENS_CONTROLLERS__;
+  const actual = C.inspect({ kind: "view", roots: [view] });
+  assert.equal(actual.controllers.length, 3);
+  assert.equal(actual.controllers[0].path, "demo/controller/Main.controller.js");
+  assert.equal(actual.controllers[1].path, "demo/controller/Base.js");
+  assert.equal(actual.controllers[2].path, "demo/ext/Extension.js");
+  const fragment = { getParent: () => view };
+  assert.equal(C.inspect({ kind: "fragment", roots: [fragment] }).ownerView, "demo.view.Main");
+  assert.equal(C.inspect({ kind: "fragment", roots: [fragment], controllerKnown: true, controller: {} }).controllers.length, 0);
+  assert.equal(C.inspect({ kind: "view", roots: [{ getController: () => null }] }).controllerStatus, "Sin controlador asociado");
 });
 test("viewport and overflow clipping exclude offscreen boxes", () => {
   const viewport = { left: 0, top: 0, right: 100, bottom: 80 };
