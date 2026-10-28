@@ -87,6 +87,27 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     const mainController = controllerState.entries.find((entry) => entry.kind === "controller" && entry.scope === "demo/view/Main.view.xml");
     assert.equal(mainController.controllers[0].name, "demo.controller.Main");
     assert.equal(mainController.controllers[0].path, "demo/controller/Main.controller.js");
+    const customerEvents = controllerState.entries.find((entry) => entry.kind === "event" && entry.ids[0].endsWith("--customerField"));
+    assert.ok(customerEvents.events.some((event) => event.name === "valueHelpRequest" && event.handlers[0].name === "onCustomerValueHelp"));
+    const changeEvent = customerEvents.events.find((event) => event.name === "change");
+    assert.ok(changeEvent.parameters.some((param) => param.name === "value" && param.type === "string"), JSON.stringify(changeEvent));
+    assert.equal(changeEvent.handlers[0].arguments, "oEvent");
+    const detailsEvent = controllerState.entries.find((entry) => entry.kind === "event" && entry.ids[0].endsWith("--loadDetails")).events.find((event) => event.name === "press");
+    assert.equal(detailsEvent.handlers[0].declaration, ".onLoadDetails(…)");
+    assert.equal(await page.evaluate((token) => {
+      const view = Object.values(sap.ui.require("sap/ui/core/Element").registry.all()).find((control) => control.isA("sap.ui.core.mvc.View") && control.getViewName() === "demo.view.Main");
+      return window.__UI5_TECH_LENS_EVENTS__.resolve(token) === view.getController().onLoadDetails;
+    }, detailsEvent.handlers[0].token), true, "Parameterized XML resolves to the real application method");
+    const cdp = await context.newCDPSession(page), scripts = new Map();
+    cdp.on("Debugger.scriptParsed", (script) => scripts.set(script.scriptId, script.url));
+    await cdp.send("Runtime.enable"); await cdp.send("Debugger.enable");
+    const resolved = await cdp.send("Runtime.evaluate", { expression: `window.__UI5_TECH_LENS_EVENTS__.resolve(${JSON.stringify(detailsEvent.handlers[0].token)})` });
+    const properties = await cdp.send("Runtime.getProperties", { objectId: resolved.result.objectId });
+    const functionLocation = properties.internalProperties.find((property) => property.name === "[[FunctionLocation]]").value.value;
+    assert.ok(scripts.get(functionLocation.scriptId).endsWith("/controller/Main.controller.js"));
+    const actualLine = fs.readFileSync(path.join(root, "demo/controller/Main.controller.js"), "utf8").split(/\r?\n/)[functionLocation.lineNumber];
+    assert.ok(actualLine.includes("onLoadDetails"), `Exact handler line: ${functionLocation.lineNumber + 1}`);
+    console.log(`Source navigation verified: Main.controller.js:${functionLocation.lineNumber + 1}`);
     for (const scope of ["Summary", "Badge", "Stats", "OrderDialog"]) {
       const entry = controllerState.entries.find((item) => item.kind === "controller" && item.scope === `demo/fragment/${scope}.fragment.xml`);
       assert.ok(entry, scope);
@@ -118,6 +139,45 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.keyboard.press("Control+a");
     assert.ok((await page.evaluate(() => window.getSelection().toString())).includes("demo/controller/Main.controller.js"));
     await page.screenshot({ path: path.join(output, "controllers-inspector.png") });
+    const sourceButton = await page.evaluate(() => {
+      const button = window.__testLensShadow.querySelector("[data-handler-token]"); button.scrollIntoView({ block: "center" });
+      const box = button.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2, token: button.dataset.handlerToken };
+    });
+    await page.mouse.click(sourceButton.x, sourceButton.y);
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-source-status")?.textContent.includes("F12"));
+    const queued = await worker.evaluate((tabId) => chrome.storage.session.get(`source:${tabId}`), tabId);
+    assert.equal(queued[`source:${tabId}`].token, sourceButton.token);
+    // Run the shipped DevTools script with real extension messaging. The native
+    // inspectedWindow.eval transport is represented by CDP's Console Utility API.
+    const devtoolsPage = await context.newPage();
+    const inspectedFunctions = [];
+    cdp.on("Runtime.inspectRequested", (event) => inspectedFunctions.push(event.object));
+    await devtoolsPage.exposeBinding("__testDevtoolsEval", async (_, expression) => {
+      const response = await cdp.send("Runtime.evaluate", { expression, includeCommandLineAPI: true, returnByValue: true });
+      if (response.exceptionDetails) throw new Error(response.exceptionDetails.text);
+      return response.result.value;
+    });
+    await devtoolsPage.addInitScript((id) => {
+      chrome.devtools = { inspectedWindow: { tabId: id, eval: (expression, settings, callback) => window.__testDevtoolsEval(expression, settings).then((value) => callback(value, null), (error) => callback(null, { description: error.message })) } };
+    }, tabId);
+    await devtoolsPage.goto(`chrome-extension://${extensionId}/devtools.html`);
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-source-status")?.textContent.includes("línea real"));
+    assert.equal(inspectedFunctions.at(-1)?.type, "function", "DevTools inspects the function without invoking it");
+    assert.equal(await page.getByRole("dialog").count(), 0, "Inspecting valueHelpRequest doesn't open the app dialog");
+    await popup.locator("#search").fill("onLoadDetails");
+    const popupEvent = popup.locator(".file").filter({ has: popup.locator(".key.event") }).first();
+    await popupEvent.locator("summary").click();
+    await popupEvent.getByRole("button", { name: "Ver función en DevTools" }).click();
+    await popup.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((node) => node.textContent.includes("línea real")));
+    assert.ok(inspectedFunctions.length >= 2, "Popup and pinned card both navigate through the real background connection");
+    const invalidSource = await popup.evaluate((tabId) => chrome.runtime.sendMessage({ channel: "ui5-lens", action: "openHandler", tabId, frameId: 0, token: `h${"a".repeat(32)}_99999` }), tabId);
+    assert.ok(invalidSource.error.includes("no está disponible"));
+    await popup.locator("#search").fill("");
+    await page.bringToFront();
+    await page.evaluate(() => { document.querySelector("iframe").style.visibility = "hidden"; window.__testLensShadow.querySelector(".hover-card").scrollTop = 0; });
+    await page.screenshot({ path: path.join(output, "events-inspector.png") });
+    await page.locator("iframe").evaluate((node) => { node.style.visibility = "visible"; });
+    await devtoolsPage.close(); await cdp.detach();
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => !window.__testLensShadow?.querySelector(".hover-card"));
     await popup.locator("#models").check();
