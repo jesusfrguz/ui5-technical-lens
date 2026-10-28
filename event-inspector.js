@@ -3,7 +3,7 @@
   "use strict";
   if (window.__UI5_TECH_LENS_EVENTS__) return;
   const safe = (fn, fallback = null) => { try { return fn() ?? fallback; } catch { return fallback; } };
-  const ids = new WeakMap(), functions = new Map();
+  const ids = new WeakMap(), functions = new Map(), descriptions = new Map();
   const prefix = `h${crypto.randomUUID().replace(/-/g, "")}_`;
   let sequence = 0;
   // Use descriptors throughout: application getters must not run during name lookup.
@@ -34,12 +34,13 @@
     }
     return "";
   }
-  function token(fn) {
+  function token(fn, description) {
     if (!ids.has(fn)) {
       const id = `${prefix}${++sequence}`;
       ids.set(fn, id); functions.set(id, new WeakRef(fn));
-      if (sequence % 100 === 0) for (const [key, ref] of functions) if (!ref.deref()) functions.delete(key);
+      if (sequence % 100 === 0) for (const [key, ref] of functions) if (!ref.deref()) { functions.delete(key); descriptions.delete(key); }
     }
+    descriptions.set(ids.get(fn), description);
     return ids.get(fn);
   }
   function signature(fn) {
@@ -90,9 +91,12 @@
           }
         }
         const ownerInfo = context.controllers?.find((item) => item.name === ownerName);
-        handlers.push({ token: token(fn), name: method || reference || property(fn, "name") || "función anónima",
+        const name = method || reference || property(fn, "name") || "función anónima";
+        const path = ownerInfo?.path || "";
+        const url = path ? safe(() => new URL(window.sap.ui.require.toUrl(path), location.href).href, "") : "";
+        handlers.push({ token: token(fn, { name, path, url }), name,
           controller: ownerName || (owner ? "Objeto de eventos" : "Receptor no identificado"),
-          path: ownerInfo?.path || "", arguments: signature(fn), resolution,
+          path, arguments: signature(fn), resolution,
           // The reference and argument count suffice; do not copy XML literal values.
           declaration: reference ? `${reference}${typeof declared === "string" && declared.includes("(") ? "(…)" : ""}` : "" });
       }
@@ -100,5 +104,10 @@
     }
     return events;
   }
-  Object.defineProperty(window, "__UI5_TECH_LENS_EVENTS__", { value: Object.freeze({ inspect, resolve: (id) => functions.get(id)?.deref() }), configurable: true });
+  function describe(id) {
+    const fn = functions.get(id)?.deref();
+    if (!fn) return null;
+    return { ...descriptions.get(id), source: safe(() => Function.prototype.toString.call(fn), "") };
+  }
+  Object.defineProperty(window, "__UI5_TECH_LENS_EVENTS__", { value: Object.freeze({ inspect, describe, resolve: (id) => functions.get(id)?.deref() }), configurable: true });
 })();

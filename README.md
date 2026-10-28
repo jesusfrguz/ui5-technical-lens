@@ -4,9 +4,9 @@ Extensión de Chrome (Manifest V3) que muestra los ficheros técnicos de las vis
 
 Creada por **Jesús Franco Guzmán** · [LinkedIn](https://es.linkedin.com/in/jesus-franco-guzman).
 
-[Descargar la extensión 1.5.0 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.5.0.zip).
+[Descargar la extensión 1.5.1 lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/raw/refs/heads/main/downloads/UI5-Technical-Lens-1.5.1.zip).
 
-La versión **1.5.0** amplía **Controladores** con eventos, parámetros y subrutinas de botones, matchcodes y otros controles. Incluye **Ver función en DevTools** para navegar al archivo y la línea de la función real. Utiliza la misma tarjeta al pasar el ratón: **Alt** la fija para seleccionar y copiar; **Alt o Esc** la cierran de forma independiente. Para actualizar una instalación descomprimida, sustituye sus archivos por los del ZIP nuevo, pulsa **Recargar** en su tarjeta de `chrome://extensions` y recarga la app para renovar los scripts ya inyectados.
+La versión **1.5.1** corrige **Ver función en DevTools**: resuelve el recurso cargado y la línea/columna del método y solicita esa posición explícitamente a Sources. También corrige la selección de iframes con la misma URL. **Alt** fija la tarjeta para seleccionar y copiar; **Alt o Esc** la cierran de forma independiente. Para actualizar, sustituye los archivos de la instalación descomprimida por los del ZIP nuevo, pulsa **Recargar** en `chrome://extensions`, recarga la app y cierra/vuelve a abrir DevTools.
 
 ## Vista de ejemplo
 
@@ -23,7 +23,7 @@ Captura de la app utilizada en las pruebas: al señalar el campo **Cliente · OD
 5. Fija **UI5 Technical Lens** en la barra de extensiones.
 6. Abre tu aplicación SAPUI5 en una URL HTTP/HTTPS y pulsa el icono de la extensión.
 
-Chrome no instala este ZIP directamente ni requiere generar un CRX. Para instalar en una organización con restricciones, consulta sus políticas de extensiones.
+Chrome no instala este ZIP directamente ni requiere generar un CRX. Para instalar en una organización con restricciones, consulta sus políticas de extensiones. Se requiere Chrome/Chromium 114 o posterior para navegar también por columna.
 
 ## Uso
 
@@ -63,13 +63,13 @@ Con **Controladores** activo, señala un botón, un matchcode o cualquier contro
 1. Señala el control y pulsa **Alt** para fijar la tarjeta sin hacer clic en la app.
 2. Pulsa **Ver función en DevTools** junto al método. También está disponible al desplegar **Eventos, parámetros y subrutinas** en el popup.
 3. Si DevTools está cerrado, abre **F12** o **Ctrl+Mayús+I**. La última función solicitada queda pendiente y se abre al conectar.
-4. Chrome selecciona **Sources**, el fichero cargado y la línea de la función. La extensión no ejecuta el handler ni añade breakpoints.
+4. DevTools abre **Sources** en el recurso y coloca el cursor en la línea y columna de la función. La tarjeta indica el archivo y las coordenadas enviadas. La extensión no ejecuta el handler ni añade breakpoints.
 
-Chrome exige que el usuario abra DevTools; una extensión normal no puede abrir esa ventana por sí sola. Después de actualizar la extensión, cierra y vuelve a abrir DevTools si ya estaba abierto. La navegación utiliza `inspect(fn)` de las herramientas de desarrollo, sin solicitar permiso `debugger`. No se inventan números de línea ni se buscan textos parecidos en el código. Si hay código minificado o un bundle, se abre esa ubicación real; la correspondencia con el archivo original depende de los source maps disponibles en DevTools. Funciones nativas/bound o wrappers de terceros pueden carecer de una ubicación navegable.
+Chrome exige que el usuario abra DevTools. Después de actualizar la extensión, cierra y vuelve a abrir DevTools si ya estaba abierto. La navegación obtiene el texto de la función registrada desde el ID exacto del marco, resuelve la URL del módulo con el cargador UI5 y compara la función completa con los scripts ya disponibles en DevTools. Un analizador JavaScript descarta comentarios y cadenas, y distingue métodos con cuerpos idénticos por su propiedad y módulo. Solo se navega si existe una ubicación única, mediante `chrome.devtools.panels.openResource(url, línea, columna)`; no se usa `inspect(fn)` como confirmación de navegación ni se solicita permiso `debugger`.
 
 Se lee defensivamente el registro interno `mEventRegistry` y los metadatos de eventos de UI5. Solo se muestran eventos con listeners registrados; no se registra actividad, no se interceptan valores disparados y no se leen `oData` ni parámetros de negocio. Los nombres de argumentos son orientativos si el código está minificado. En handlers XML con argumentos se resuelve la ruta del método en el receptor actual, sin evaluar expresiones. Las declaraciones XML se resumen como `.metodo(…)`, sin copiar sus valores literales. Si no se puede resolver un alias/módulo o wrapper, se conserva la función registrada y se indica así. No se inspeccionan listeners DOM ajenos a UI5 ni se reconstruye la cadena de llamadas que pueda ejecutar el handler.
 
-En iframes se usa su URL como contexto de DevTools. Si varios marcos tienen exactamente la misma URL, la API de Chrome puede seleccionar otro marco; en ese caso se informa de que la función no se encontró. Una recarga invalida las referencias anteriores y requiere volver a señalar el control.
+En iframes se usa el ID del marco para recuperar la función, por lo que varias ventanas con exactamente la misma URL no se confunden. Una recarga invalida las referencias anteriores y requiere volver a señalar el control. Si no se encuentra el código, es nativo/bound o hay varias ubicaciones posibles, se indica el motivo y no se abre un archivo arbitrario. Los bundles se abren en la ubicación de la función dentro del recurso cargado. El formateo automático y los source maps de DevTools pueden cambiar las coordenadas visibles respecto al archivo original: el cursor se revela en la posición correspondiente.
 
 ## Detección y límites
 
@@ -110,14 +110,15 @@ Abre `http://127.0.0.1:4173`. La demo necesita Internet para cargar SAPUI5 1.120
 ```powershell
 npx playwright install chromium
 npm run test:browser
+npm run test:devtools
 npm run package
 ```
 
-Las pruebas de navegador usan un perfil temporal aislado con la extensión real, sin modificar tu perfil personal de Chrome. Generan capturas en `test-results/`. El paquete de `dist` contiene únicamente los archivos necesarios para la extensión y su documentación; excluye la demo, las pruebas y las dependencias.
+Las pruebas de navegador usan un perfil temporal aislado con la extensión real, sin modificar tu perfil personal de Chrome. Generan capturas en `test-results/`. El paquete de `dist` contiene únicamente los archivos necesarios para la extensión y su documentación; excluye la demo, las pruebas y las dependencias. `npm run test:devtools` abre el frontend real de DevTools en un navegador headless y verifica el archivo y la selección del editor Sources, incluyendo métodos homónimos, cuerpos idénticos, columnas minificadas, sourceURL e iframes de URL idéntica.
 
 Si Windows bloquea el ejecutable descargado de Chromium, se puede usar Edge instalado para la misma prueba: `$env:UI5_TEST_BROWSER = 'msedge'; npm run test:browser`. La verificación realizada en este entorno usó Edge/Chromium con la extensión real y SAPUI5 1.120.x.
 
-Referencias de mantenimiento: [creación de fragmentos en SAPUI5](https://github.com/SAP-docs/sapui5/blob/main/docs/04_Essentials/instantiation-of-fragments-04129b2.md), [implementación de Fragment en OpenUI5](https://github.com/UI5/openui5/blob/master/src/sap.ui.core/src/sap/ui/core/Fragment.js), [Chrome Scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting), [Chrome inspect(function)](https://developer.chrome.com/docs/devtools/console/utilities#inspect), [Chrome inspectedWindow.eval](https://developer.chrome.com/docs/extensions/reference/api/devtools/inspectedWindow).
+Referencias de mantenimiento: [creación de fragmentos en SAPUI5](https://github.com/SAP-docs/sapui5/blob/main/docs/04_Essentials/instantiation-of-fragments-04129b2.md), [implementación de Fragment en OpenUI5](https://github.com/UI5/openui5/blob/master/src/sap.ui.core/src/sap/ui/core/Fragment.js), [Chrome Scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting), [Chrome openResource](https://developer.chrome.com/docs/extensions/reference/api/devtools/panels#method-openResource), [Chrome recursos de DevTools](https://developer.chrome.com/docs/extensions/reference/api/devtools/inspectedWindow). El analizador Acorn 8.19.0 se distribuye localmente con su licencia MIT en `vendor/acorn.LICENSE`.
 
 ## Autor
 

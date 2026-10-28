@@ -11,4 +11,4 @@
 - El permiso para sitios HTTP/HTTPS permite la inspección en apps UI5 y sus marcos. Puedes restringirlo desde Chrome. No añade solicitudes de red propias de la extensión; UI5 puede cargar su módulo Fragment mediante su cargador habitual cuando comienza la inspección.
 - La app de demostración es independiente de la extensión y descarga SAPUI5 del CDN oficial de SAP.
 
-- **Ver función en DevTools** transmite la referencia de función y la URL del marco únicamente entre los componentes locales de la extensión para seleccionar su código en Sources. No guarda esa URL ni el código; no ejecuta la función. El usuario abre DevTools manualmente.
+- **Ver función en DevTools** obtiene la función del ID exacto del marco y transmite su texto y la URL del módulo únicamente entre los componentes locales de la extensión. Compara y analiza los scripts ya disponibles en DevTools para seleccionar el fichero, línea y columna en Sources. No guarda las URLs ni el código y no realiza solicitudes de red propias para buscarlos; no ejecuta la función. El usuario abre DevTools manualmente.

@@ -1,6 +1,6 @@
 {
   "name": "ui5-technical-lens",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "description": "Chrome extension for SAPUI5 view and fragment overlays",
   "author": {
@@ -11,9 +11,11 @@
     "test": "node --test tests/*.test.cjs",
     "test:browser": "node tests/browser.cjs",
     "demo": "node tools/serve.cjs",
-    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package.ps1"
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package.ps1",
+    "test:devtools": "node tests/devtools-browser.cjs"
   },
   "devDependencies": {
+    "acorn": "8.19.0",
     "playwright": "^1.56.1"
   }
 }

@@ -8,10 +8,10 @@ const devtools = new Map();
 const validToken = (value) => typeof value === "string" && /^h[a-f0-9]{32}_\d+$/.test(value);
 async function sourceRequest(tabId, token, frameId) {
   const results = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN",
-    func: (id) => typeof window.__UI5_TECH_LENS_EVENTS__?.resolve(id) === "function" ? location.href : null, args: [token] });
-  const frameURL = results[0]?.result;
-  if (!frameURL) throw new Error("La función ya no está disponible. Actualiza la inspección.");
-  return { action: "openHandler", token, requestId: token, frameURL };
+    func: (id) => window.__UI5_TECH_LENS_EVENTS__?.describe(id) || null, args: [token] });
+  const descriptor = results[0]?.result;
+  if (!descriptor?.source) throw new Error("La función ya no está disponible. Actualiza la inspección.");
+  return { action: "openHandler", token, requestId: token, descriptor };
 }
 function sourceResult(tabId, token, status) {
   const result = { channel: "ui5-lens", tabId, sourceResult: { token, status: String(status).slice(0, 300) } };
@@ -45,7 +45,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     (async () => {
       const frameId = fromExtensionPage ? message.frameId : sender.frameId;
       if (!Number.isInteger(frameId)) throw new Error("Marco no válido");
-      // Derive frame URL and validate the live function in the target frame.
+      // Read the live function from the exact frame ID, including identical-URL iframes.
       const request = await sourceRequest(tabId, message.token, frameId);
       const port = devtools.get(tabId);
       if (port) { port.postMessage(request); reply({ status: "Abriendo la función en Sources…" }); }
