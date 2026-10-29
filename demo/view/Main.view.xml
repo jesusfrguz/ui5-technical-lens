@@ -10,12 +10,12 @@
       <core:Fragment fragmentName="demo.fragment.Stats" type="XML"/>
       <Panel headerText="Campos con bindings · JSON y OData" class="sapUiSmallMarginTop">
         <VBox class="sapUiSmallMargin" binding="{sales>/Orders('4500001234')}">
-          <Label text="Cliente · OData V2"/><Input id="customerField" value="{sales>CustomerName}" editable="{ui>/editable}" showValueHelp="true" valueHelpRequest=".onCustomerValueHelp" change=".onCustomerChange"/>
-          <Label text="Nota · JSON por defecto"/><Input id="noteField" value="{/note}"/>
+          <Label text="Cliente · OData V2" labelFor="customerField"/><Input id="customerField" value="{sales>CustomerName}" editable="{ui>/editable}" showValueHelp="true" valueHelpRequest=".onCustomerValueHelp" change=".onCustomerChange"/>
+          <Label text="Nota · JSON por defecto" labelFor="noteField"/><Input id="noteField" value="{/note}"/>
           <Text id="compositeField" text="{= ${ui>/state} + ' · ' + ${/note} }"/>
         </VBox>
         <VBox class="sapUiSmallMargin" binding="{catalog>/Products('P1')}">
-          <Label text="Producto · OData V4"/><Input id="productField" value="{catalog>Name}"/>
+          <Label text="Producto · OData V4" labelFor="productField"/><Input id="productField" value="{catalog>Name}"/>
         </VBox>
       </Panel>
       <VBox id="detailsHost" class="sapUiMediumMarginTop"><Button id="loadDetails" text="Cargar una segunda vista" press=".onLoadDetails($event)"/></VBox>

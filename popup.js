@@ -69,7 +69,7 @@ function render() {
     body.title = entry.ids.join("\n"); body.append(name, path, meta);
     if (entry.kind === "event") {
       const details = document.createElement("details"), summary = document.createElement("summary"), info = document.createElement("div");
-      summary.textContent = "Eventos, parámetros y subrutinas"; info.className = "binding-details";
+      summary.textContent = "Eventos, parámetros y métodos asociados"; info.className = "binding-details";
       for (const event of entry.events) {
         const title = document.createElement("div");
         title.textContent = `${event.name}\nParámetros del evento: ${event.parameters.map((param) => `${param.name}: ${param.type}`).join(", ") || "sin parámetros declarados"}`;

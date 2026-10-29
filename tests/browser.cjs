@@ -2,6 +2,7 @@
 const assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 const { chromium } = require("playwright"), server = require("../tools/serve.cjs");
 const root = path.resolve(__dirname, "..");
+const extensionRoot = path.resolve(process.env.UI5_TEST_EXTENSION_DIR || root);
 const output = path.join(root, "test-results"); fs.mkdirSync(output, { recursive: true });
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
 (async () => {
@@ -10,7 +11,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${server.address().port}`;
     context = await chromium.launchPersistentContext(profile, { channel: process.env.UI5_TEST_BROWSER || "chromium", headless: true,
-      args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`], viewport: { width: 1280, height: 900 } });
+      args: [`--disable-extensions-except=${extensionRoot}`, `--load-extension=${extensionRoot}`], viewport: { width: 1280, height: 900 } });
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: url });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const extensionId = new URL(worker.url()).host;
@@ -178,7 +179,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     assert.ok(invalidSource.error.includes("no está disponible"));
     await popup.locator("#search").fill("");
     await page.bringToFront();
-    await page.evaluate(() => { document.querySelector("iframe").style.visibility = "hidden"; window.__testLensShadow.querySelector(".hover-card").scrollTop = 0; });
+    await page.evaluate(() => { document.querySelector("iframe").style.visibility = "hidden"; window.__testLensShadow.querySelector(".hover-content").scrollTop = 0; });
     await page.screenshot({ path: path.join(output, "events-inspector.png") });
     await page.locator("iframe").evaluate((node) => { node.style.visibility = "visible"; });
     await devtoolsPage.close(); await cdp.detach();
@@ -190,6 +191,95 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     assert.ok(await page.evaluate(() => window.__testLensShadow.querySelector(".hover-card").textContent.includes("demo/controller/Main.controller.js")));
     assert.ok(await page.evaluate(() => window.__testLensShadow.querySelector(".hover-card").textContent.includes("CustomerName")));
     assert.equal(await page.evaluate(() => window.__testLensShadow.querySelectorAll(".hover-card").length), 1);
+
+    // Combined summaries must keep the Alt hint and whole rows visible, including
+    // in a small frame. Pinning retains all details and keeps actions accessible.
+    await popup.locator("#odatas").check();
+    await page.locator("iframe").evaluate((node) => { node.style.visibility = "hidden"; });
+    await page.bringToFront();
+    await page.waitForFunction(() => document.hasFocus());
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.keyboard.down("Control");
+    await page.waitForFunction(() => window.__testLensShadow.querySelectorAll('.discovery-outline[data-target-id$="--customerField"]').length === 3);
+    const discoveries = await page.evaluate(() => [...window.__testLensShadow.querySelectorAll(".discovery-outline")].map((node) => ({
+      id: node.dataset.targetId, kind: node.dataset.kind, color: getComputedStyle(node).outlineColor,
+      offset: getComputedStyle(node).outlineOffset, borderWidth: getComputedStyle(node).borderWidth, pointerEvents: getComputedStyle(node).pointerEvents
+    })));
+    const customerOutlines = discoveries.filter((node) => node.id.endsWith("--customerField"));
+    assert.deepEqual(customerOutlines.map((node) => node.kind).sort(), ["controller", "model", "odata"]);
+    assert.deepEqual(customerOutlines.map((node) => node.color).sort(), ["rgb(17, 131, 94)", "rgb(175, 88, 13)", "rgb(86, 86, 184)"].sort());
+    assert.equal(new Set(customerOutlines.map((node) => node.offset)).size, 3, "Each active flag has a separate ring");
+    assert.ok(discoveries.every((node) => node.pointerEvents === "none"), "Ctrl outlines let app interactions through");
+    assert.ok(discoveries.every((node) => node.borderWidth === "0px"), "Only the intended colored outline is drawn");
+    assert.ok(discoveries.some((node) => node.id.endsWith("--noteField") && node.kind === "model"));
+    assert.ok(!discoveries.some((node) => node.id.endsWith("--noteField") && node.kind === "odata"), "A JSON field is not marked as OData");
+    await page.mouse.move(12, 80);
+    await page.screenshot({ path: path.join(output, "ctrl-targets.png") });
+    await page.evaluate(() => window.__UI5_TECH_LENS__.setOptions({ odatas: false }));
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".discovery-outline.odata") && window.__testLensShadow.querySelector(".discovery-outline.model"));
+    await page.evaluate(() => window.__UI5_TECH_LENS__.setOptions({ odatas: true }));
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".discovery-outline.odata"));
+    await page.keyboard.up("Control");
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".discovery-outline"));
+    await page.keyboard.down("Control");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".discovery-outline"));
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".discovery-outline"));
+    await page.keyboard.up("Control");
+    await page.keyboard.down("Control");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".discovery-outline"));
+    await page.evaluate(() => window.__UI5_TECH_LENS__.setOptions({ enabled: false }));
+    await page.locator("#ui5-technical-lens-overlay").waitFor({ state: "detached" });
+    await page.keyboard.up("Control");
+    await page.evaluate(() => window.__UI5_TECH_LENS__.setOptions({ enabled: true }));
+    await page.waitForFunction(() => window.__testLensShadow?.host.isConnected && !window.__testLensShadow.querySelector(".discovery-outline"));
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 640, height: 480 }, { width: 360, height: 300 }]) {
+      await page.setViewportSize(viewport);
+      await page.locator('[id$="--customerField-inner"]').hover();
+      await page.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-heading")?.textContent === "Modelos · OData · Controladores");
+      const preview = await page.evaluate(() => {
+        const card = window.__testLensShadow.querySelector(".hover-card"), box = card.getBoundingClientRect();
+        const content = card.querySelector(".hover-content"), note = card.querySelector(".hover-note").getBoundingClientRect();
+        return { inViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+          hintVisible: note.top >= box.top && note.bottom <= box.bottom && note.top >= content.getBoundingClientRect().bottom,
+          rowsVisible: [...content.querySelectorAll(".hover-row")].every((row) => row.getBoundingClientRect().bottom <= content.getBoundingClientRect().bottom + 1),
+          title: card.querySelector(".hover-name").textContent, text: card.textContent };
+      });
+      assert.ok(preview.inViewport && preview.hintVisible && preview.rowsVisible, `Complete preview rows and Alt hint at ${viewport.width}×${viewport.height}: ${JSON.stringify(preview)}`);
+      assert.ok(preview.title.includes("Cliente · OData V2") && preview.title.endsWith("Input"), "Uses the associated label in the control title");
+      assert.ok(!preview.text.includes("Cliente demo"), "Preview doesn't read the field value");
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.locator('[id$="--customerField-inner"]').hover();
+    await page.screenshot({ path: path.join(output, "review-hover-combined.png") });
+    await page.keyboard.press("Alt");
+    await page.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card.pinned"));
+    const combined = await page.evaluate(() => window.__testLensShadow.querySelector(".hover-content").innerText);
+    for (const detail of ["CustomerName", "editable", "ordersService", "onCustomerChange", "onCustomerValueHelp", "Parámetros del evento", "Eventos y métodos asociados"]) assert.ok(combined.includes(detail), detail);
+    assert.equal(combined.split("demo/controller/Main.controller.js").length - 1, 1, "A shared controller resource is listed once");
+    await page.screenshot({ path: path.join(output, "review-alt-combined.png") });
+    await page.setViewportSize({ width: 360, height: 300 });
+    await page.keyboard.press("End");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-content").scrollTop > 0);
+    const pinnedLayout = await page.evaluate(() => {
+      const card = window.__testLensShadow.querySelector(".hover-card.pinned"), content = card.querySelector(".hover-content");
+      const box = card.getBoundingClientRect(), actions = card.querySelector(".hover-actions").getBoundingClientRect(), note = card.querySelector(".hover-note").getBoundingClientRect();
+      return { scrolling: content.scrollTop > 0, actionsVisible: actions.top >= box.top && actions.bottom <= box.bottom,
+        noteVisible: note.top >= box.top && note.bottom <= box.bottom, inViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight };
+    });
+    assert.ok(pinnedLayout.scrolling && pinnedLayout.actionsVisible && pinnedLayout.noteVisible && pinnedLayout.inViewport, JSON.stringify(pinnedLayout));
+    await page.screenshot({ path: path.join(output, "review-alt-small.png") });
+    const fixedCopy = await page.evaluate(() => { const b = window.__testLensShadow.querySelector(".hover-actions .hover-copy").getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; });
+    await page.mouse.click(fixedCopy.x, fixedCopy.y);
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-actions .hover-copy").textContent === "Copiado");
+    assert.ok((await page.evaluate(() => navigator.clipboard.readText())).includes("onCustomerValueHelp"), "Fixed copy action includes scrolled-out content");
+    const closeCard = await page.evaluate(() => { const b = window.__testLensShadow.querySelector(".hover-close").getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; });
+    await page.mouse.click(closeCard.x, closeCard.y);
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".hover-card"));
+    assert.equal(await page.evaluate(() => window.__UI5_TECH_LENS__.isPinned()), false, "Close button releases the inspector");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.locator("iframe").evaluate((node) => { node.style.visibility = "visible"; });
+    await popup.locator("#odatas").uncheck();
     await popup.locator("#models").uncheck();
     await popup.locator("#controllers").uncheck();
     await page.waitForFunction(() => !window.__UI5_TECH_LENS__.snapshot().entries.some((entry) => entry.kind === "controller"));
@@ -374,6 +464,12 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await frame.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card")?.dataset.controlId.endsWith("--customerField"));
     assert.equal(await page.evaluate(() => window.__testLensShadow.querySelectorAll(".hover-card").length), 0, "Parent card disappears when entering iframe");
     // Keyboard focus is still outside the iframe: the shortcut must reach its hover card.
+    await page.keyboard.down("Control");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".discovery-outline"));
+    await frame.waitForFunction(() => window.__testLensShadow.querySelector(".discovery-outline"));
+    await page.keyboard.up("Control");
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".discovery-outline"));
+    await frame.waitForFunction(() => !window.__testLensShadow.querySelector(".discovery-outline"));
     await page.keyboard.press("Alt");
     await frame.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card.pinned"));
     await page.keyboard.press("Escape");

@@ -1,17 +1,20 @@
 "use strict";
 const { chromium } = require("playwright"), assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path"), http = require("node:http");
 const root = path.resolve(__dirname, ".."), profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-reload-test-"));
+const extensionRoot = path.resolve(process.env.UI5_TEST_EXTENSION_DIR || root);
 const server = http.createServer((request, response) => { response.setHeader("Content-Type", "text/html"); response.end("<!doctype html><h1>Extension reload regression</h1>"); });
 (async () => {
   let context;
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     context = await chromium.launchPersistentContext(profile, { channel: process.env.UI5_TEST_BROWSER || "chromium", headless: true,
-      args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`] });
+      args: [`--disable-extensions-except=${extensionRoot}`, `--load-extension=${extensionRoot}`] });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
-    const page = context.pages()[0], exceptions = [];
-    const cdp = await context.newCDPSession(page); await cdp.send("Runtime.enable");
+    assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().version), require("../manifest.json").version, "Testing the current packaged version");
+    const page = context.pages()[0], exceptions = [], invalidationLogs = [];
+    const cdp = await context.newCDPSession(page); await cdp.send("Runtime.enable"); await cdp.send("Log.enable");
     cdp.on("Runtime.exceptionThrown", ({ exceptionDetails }) => exceptions.push(exceptionDetails.exception?.description || exceptionDetails.text));
+    cdp.on("Log.entryAdded", ({ entry }) => { if (/extension context invalidated/i.test(entry.text)) invalidationLogs.push(entry.text); });
     page.on("pageerror", (error) => exceptions.push(error.message));
     await page.addInitScript(() => { window.__sourceReplies = []; window.addEventListener("message", (event) => {
       if (event.source === window && event.data?.channel === "ui5-lens:source-result") window.__sourceReplies.push(event.data);
@@ -29,6 +32,8 @@ const server = http.createServer((request, response) => { response.setHeader("Co
     await sendSource();
     await page.evaluate(() => {
       window.postMessage({ channel: "ui5-lens:hover-request", command: "toggle" }, "*");
+      window.postMessage({ channel: "ui5-lens:highlight-request", active: true }, "*");
+      window.postMessage({ channel: "ui5-lens:highlight-request", active: false }, "*");
       window.postMessage({ channel: "ui5-lens:ready" }, "*");
     });
     // Invalidated bridges either report reload guidance or have already been
@@ -37,11 +42,13 @@ const server = http.createServer((request, response) => { response.setHeader("Co
     const afterReload = await page.evaluate(() => window.__sourceReplies);
     if (afterReload.length) assert.ok(afterReload.every((reply) => reply.status?.includes("Recarga esta pestaña")));
     assert.deepEqual(exceptions, []);
+    assert.deepEqual(invalidationLogs, [], "Cleanup emits no invalid-context browser log");
     await page.reload(); await page.waitForFunction(() => Boolean(window.__UI5_TECH_LENS__));
     await sendSource();
     await page.waitForFunction(() => window.__sourceReplies.some((reply) => reply.status?.includes("La función ya no está disponible")));
     assert.deepEqual(exceptions, []);
-    console.log("PASS: extension runtime reload with the app open, stale Alt/source/ready messages, no uncaught errors and live bridge after page reload.");
+    assert.deepEqual(invalidationLogs, []);
+    console.log("PASS: extension runtime reload with the app open, stale Ctrl/Alt/source/ready messages, no uncaught errors or invalid-context logs and live bridge after page reload.");
   } finally {
     await context?.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
     if (profile.startsWith(path.join(os.tmpdir(), "ui5-reload-test-"))) fs.rmSync(profile, { recursive: true, force: true });

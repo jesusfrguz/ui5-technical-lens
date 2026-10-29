@@ -4,6 +4,7 @@ const stateKey = (tabId) => `tab:${tabId}`;
 // Serialize writes: popup changes and newly loaded frames must see one consistent state.
 let writes = Promise.resolve();
 let hoverCommands = Promise.resolve();
+let highlightCommands = Promise.resolve();
 const devtools = new Map();
 const validToken = (value) => typeof value === "string" && /^h[a-f0-9]{32}_\d+$/.test(value);
 async function sourceRequest(tabId, token, frameId) {
@@ -66,6 +67,14 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         const lens = window.__UI5_TECH_LENS__;
         if (release) lens?.release?.(); else lens?.pin?.();
       }, args: [release] });
+      reply(true);
+    }).catch(() => reply(false));
+    return true;
+  }
+  if (message.action === "highlightTargets" && sender.tab && typeof message.active === "boolean") {
+    highlightCommands = highlightCommands.catch(() => {}).then(async () => {
+      await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN",
+        func: (active) => { window.__UI5_TECH_LENS__?.highlightTargets?.(active); }, args: [message.active] });
       reply(true);
     }).catch(() => reply(false));
     return true;

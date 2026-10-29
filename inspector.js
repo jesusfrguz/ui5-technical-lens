@@ -5,9 +5,10 @@
   const D = window.__UI5_TECH_LENS_DATA__;
   const C = window.__UI5_TECH_LENS_CONTROLLERS__;
   const E = window.__UI5_TECH_LENS_EVENTS__;
-  let preferences = H.options(), host, layer, hoverLayer, observer, timer, runtimeTimer, frameRequest, hoverRequest, lastScan = 0;
+  let preferences = H.options(), host, layer, discoveryLayer, hoverLayer, observer, timer, runtimeTimer, frameRequest, hoverRequest, lastScan = 0;
   let pointer = null, dismissedNode = null, activeHoverNode = null;
   let pinned = null, handledAlt = false, handledEscape = false;
+  let discoveryActive = false;
   let dataTargets = new Map();
   let entries = [], controls = [], hooksInstalled = false, loadingModules = false, selected = "";
   const kindOption = { view: "views", fragment: "fragments", model: "models", odata: "odatas", controller: "controllers", event: "controllers" };
@@ -240,11 +241,42 @@
     const style = document.createElement("style");
     style.textContent = `:host{pointer-events:none!important}.box{position:fixed;box-sizing:border-box;border:2px solid var(--color);border-radius:5px;background:var(--fill);pointer-events:none}.view{--color:#087eae;--fill:#009fe508}.fragment{--color:#a84edb;--fill:#a84edb0c;border-style:dashed}.model{--color:#11835e;--fill:#11835e08;border-style:dotted}.odata{--color:#af580d;--fill:#ed800b08;border-style:dashed}.selected{border-width:4px;background:#ffce3230;box-shadow:0 0 0 3px #ffce32}.tag{position:absolute;left:-2px;top:0;max-width:calc(100vw - 12px);box-sizing:border-box;padding:4px 8px;border-radius:0 0 5px 0;background:var(--color);color:white;font:600 11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;box-shadow:0 2px 6px #0002;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.model .tag,.odata .tag{white-space:pre;max-width:560px}.selected .tag{background:#725600}`;
     layer = document.createElement("div");
+    discoveryLayer = document.createElement("div");
     hoverLayer = document.createElement("div");
-    style.textContent += `.hover-outline{position:fixed;box-sizing:border-box;border:2px solid #168469;border-radius:5px;background:#16846909;pointer-events:none}.hover-outline.odata{border-color:#af580d}.hover-card{position:fixed;box-sizing:border-box;background:#fff;color:#173247;border:1px solid #d8e5eb;border-top:3px solid #168469;border-radius:10px;box-shadow:0 8px 30px #17324735;padding:13px 15px;font:12px/1.5 Segoe UI,system-ui,sans-serif;pointer-events:none;overflow:hidden;overflow-wrap:anywhere}.hover-card.odata{border-top-color:#af580d}.hover-heading{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:#11835e;font-weight:700}.hover-card.odata .hover-heading{color:#af580d}.hover-name{font-size:14px;font-weight:700;margin:4px 0}.hover-id,.hover-scope{font:10px/1.5 Consolas,monospace;color:#758a98}.hover-section{margin-top:10px;padding-top:8px;border-top:1px solid #e6edf1}.hover-section-title{font-weight:600;font-size:11px;margin-bottom:5px}.hover-row{margin:5px 0;color:#436170;font-size:11px}.hover-row strong{color:#173247}.hover-row code{display:block;font:10px/1.5 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:#31566b}.hover-note{margin-top:10px;font-size:10px;color:#7a8c99}`;
-    style.textContent += `.hover-card.pinned{pointer-events:auto!important;user-select:text!important;overflow:auto;overscroll-behavior:contain;outline:none}.hover-card.pinned ::selection{background:#bfe8f4;color:#173247}.hover-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px;padding-bottom:9px;border-bottom:1px solid #e6edf1;font-size:10px;color:#687f8c;user-select:none}.hover-copy{font:600 11px Segoe UI,system-ui,sans-serif;padding:6px 10px;border:1px solid #c8dce5;border-radius:6px;background:#edf6f9;color:#235b70;cursor:pointer}.hover-copy:focus-visible{outline:2px solid #168469;outline-offset:2px}`;
+    style.textContent += `
+      .hover-outline{position:fixed;box-sizing:border-box;border:2px solid #168469;border-radius:5px;background:#16846909;pointer-events:none}
+      .hover-outline.odata{border-color:#af580d}
+      .hover-card{position:fixed;box-sizing:border-box;display:flex;flex-direction:column;background:#fff;color:#173247;border:1px solid #d8e5eb;border-top:3px solid #168469;border-radius:10px;box-shadow:0 8px 30px #17324735;padding:14px 16px;font:13px/1.5 Segoe UI,system-ui,sans-serif;pointer-events:none;overflow:hidden;overflow-wrap:anywhere}
+      .hover-card.odata{border-top-color:#af580d}
+      .hover-content{min-height:0;overflow:hidden}
+      .hover-heading{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#116d50;font-weight:700}
+      .hover-card.odata .hover-heading{color:#9a4b09}
+      .hover-name{font-size:16px;font-weight:700;margin:4px 0 6px}
+      .hover-id,.hover-scope{font:12px/1.5 Consolas,monospace;color:#526b7a}
+      .hover-section{margin-top:12px;padding-top:10px;border-top:1px solid #e6edf1}
+      .hover-section-title{font-weight:600;font-size:12px;margin-bottom:6px}
+      .hover-row{margin:7px 0;color:#436170;font-size:12px}
+      .hover-row strong{color:#173247}
+      .hover-row code{display:block;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:#31566b}
+      .hover-note{flex-shrink:0;margin-top:12px;padding-top:10px;border-top:1px solid #e6edf1;font-size:12px;color:#526b7a}
+      .hover-card:not(.pinned) .hover-id,.hover-card:not(.pinned) .hover-scope{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .hover-card:not(.pinned) .hover-name,.hover-card:not(.pinned) .hover-row code{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+      .hover-card:not(.pinned) .hover-section{margin-top:8px;padding-top:7px}
+      .hover-card:not(.pinned) .hover-row{margin:4px 0}
+      .hover-card.pinned{pointer-events:auto!important;user-select:text!important;outline:none}
+      .hover-card.pinned .hover-content{overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:2px 5px 2px 0}
+      .hover-card.pinned .hover-content:focus-visible{outline:1px solid #c8dce5;outline-offset:-1px}
+      .hover-card.pinned ::selection{background:#bfe8f4;color:#173247}
+      .hover-actions{flex-shrink:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #e6edf1;font-size:12px;color:#526b7a;user-select:none}
+      .hover-actions>span{margin-right:auto}
+      .hover-copy,.hover-close{font:600 12px Segoe UI,system-ui,sans-serif;padding:7px 10px;border:1px solid #c8dce5;border-radius:6px;background:#edf6f9;color:#235b70;cursor:pointer}
+      .hover-close{background:#fff}
+      .hover-copy:focus-visible,.hover-close:focus-visible{outline:2px solid #168469;outline-offset:2px}
+      .hover-source-status{font-size:12px;margin-top:4px}
+    `;
     style.textContent += `.hover-card.controller{border-top-color:#5656b8}.hover-card.controller .hover-heading{color:#5656b8}.hover-outline.controller{border-color:#5656b8}`;
-    shadow.append(style, layer, hoverLayer);
+    style.textContent += `.controller{--color:#5656b8}.discovery-outline{position:fixed;box-sizing:border-box;border:0;border-radius:5px;outline:2px solid var(--color);background:transparent;pointer-events:none}`;
+    shadow.append(style, layer, discoveryLayer, hoverLayer);
     document.documentElement.append(host);
   }
 
@@ -289,7 +321,48 @@
       }
     }
     layer.replaceChildren(output);
+    drawDiscovery();
     renderHover();
+  }
+
+  function drawDiscovery() {
+    if (!discoveryLayer) return;
+    const output = document.createDocumentFragment();
+    if (discoveryActive && preferences.enabled) {
+      let count = 0;
+      for (const [node, items] of dataTargets) {
+        const kinds = [...new Set(items.filter((entry) => preferences[kindOption[entry.kind]])
+          .map((entry) => entry.kind === "event" ? "controller" : entry.kind))];
+        if (!kinds.length) continue;
+        const rect = visibleRect(node);
+        if (!rect) continue;
+        if (count++ >= 300) break;
+        kinds.forEach((kind, index) => {
+          const outline = document.createElement("div");
+          outline.className = `discovery-outline ${kind}`;
+          outline.dataset.targetId = node.id;
+          outline.dataset.kind = kind;
+          // Separate rings keep every active flag's color visible on one field.
+          outline.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;outline-offset:${2 + index * 3}px`;
+          output.append(outline);
+        });
+      }
+    }
+    discoveryLayer.replaceChildren(output);
+  }
+
+  function highlightTargets(active) {
+    const next = Boolean(active && preferences.enabled);
+    if (next === discoveryActive) return;
+    discoveryActive = next;
+    if (next) schedule(true); else discoveryLayer?.replaceChildren();
+  }
+
+  function requestHighlights(active) {
+    highlightTargets(active);
+    // The focused frame receives the keyboard event; the extension coordinates
+    // the temporary outlines with the other frames in this tab.
+    window.postMessage({ channel: "ui5-lens:highlight-request", active }, "*");
   }
 
   function hoveredData() {
@@ -327,6 +400,44 @@
     if (!target || target.node === dismissedNode) return null;
     return { node: target.node, items: [...(data?.items || []), ...(eventTarget?.items || []), ...(eventTarget ? [] : controller?.items || [])] };
   }
+  function controlLabel(control) {
+    // Read explicitly associated labels only, never a field value or its text.
+    const nodes = new Set([safe(() => control.getFocusDomRef()), safe(() => control.getDomRef())].filter(Boolean));
+    const labels = new Set();
+    for (const node of nodes) {
+      for (const label of node.labels || []) labels.add(label);
+      for (const id of (node.getAttribute("aria-labelledby") || "").split(/\s+/)) {
+        const label = document.getElementById(id);
+        if (label?.matches("label,.sapMLabel,.sapUiLbl")) labels.add(label);
+      }
+    }
+    return [...labels].map((label) => label.textContent.replace(/\s+/g, " ").trim()).filter(Boolean).join(" · ");
+  }
+
+  function sizeHoverCard(card, fixed) {
+    card.style.width = `${Math.max(0, Math.min(fixed ? 560 : 460, innerWidth - 24))}px`;
+    card.style.maxHeight = `${Math.max(0, Math.min(fixed ? 760 : 520, innerHeight - 24))}px`;
+  }
+
+  function fitHoverPreview(content, note, omitted) {
+    const updateNote = () => { note.textContent = `${omitted ? `+${omitted} elementos · ` : ""}Alt para ver todo y copiar · Esc para cerrar`; };
+    updateNote();
+    // Remove whole summary rows rather than silently cutting off a section or
+    // the Alt hint. Full paths, parameters and all rows remain in the pinned card.
+    while (content.scrollHeight > content.clientHeight + 1) {
+      const sections = [...content.querySelectorAll(".hover-section")];
+      const multiple = sections.findLast((section) => section.querySelectorAll(".hover-row").length > 1);
+      if (multiple) { multiple.querySelector(".hover-row:last-child").remove(); omitted++; }
+      else if (sections.length) { omitted += sections.at(-1).querySelectorAll(".hover-row").length; sections.at(-1).remove(); }
+      else {
+        const metadata = content.querySelector(".hover-scope") || content.querySelector(".hover-id");
+        if (!metadata) break;
+        metadata.remove(); omitted++;
+      }
+      updateNote();
+    }
+  }
+
   function renderHover() {
     if (!hoverLayer) return;
     if (pinned && (!preferences.enabled || pinned.options !== inspectionOptions())) releasePinned(false);
@@ -335,8 +446,7 @@
       const rect = visibleRect(pinned.node);
       pinned.outline.style.display = rect ? "block" : "none";
       if (rect) pinned.outline.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
-      pinned.card.style.width = `${Math.max(0, Math.min(460, innerWidth - 24))}px`;
-      pinned.card.style.maxHeight = `${Math.max(0, Math.min(440, innerHeight - 24))}px`;
+      sizeHoverCard(pinned.card, true);
       const box = pinned.card.getBoundingClientRect();
       pinned.card.style.left = `${Math.max(12, Math.min(box.left, innerWidth - box.width - 12))}px`;
       pinned.card.style.top = `${Math.max(12, Math.min(box.top, innerHeight - box.height - 12))}px`;
@@ -367,31 +477,77 @@
     const content = add(card, "div", "hover-content", "");
     if (pinned) {
       const actions = document.createElement("div"); actions.className = "hover-actions";
-      add(actions, "span", "", "Tarjeta fijada · Alt o Esc para cerrar");
+      add(actions, "span", "", "Fijada · Alt o Esc");
       const copy = add(actions, "button", "hover-copy", "Copiar todo"); copy.type = "button";
       copy.addEventListener("click", async () => {
         try { await copyCard(content); copy.textContent = "Copiado"; }
         catch { copy.textContent = "Selecciona y usa Ctrl+C"; }
       });
-      card.prepend(actions); card.tabIndex = 0; card.setAttribute("role", "region"); card.setAttribute("aria-label", "Inspector técnico fijado");
+      const close = add(actions, "button", "hover-close", "Cerrar"); close.type = "button";
+      close.setAttribute("aria-label", "Cerrar inspector técnico");
+      close.addEventListener("click", releaseCard);
+      card.prepend(actions); card.tabIndex = -1; content.tabIndex = 0;
+      card.setAttribute("role", "region"); card.setAttribute("aria-label", "Inspector técnico fijado");
       for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "wheel"]) card.addEventListener(type, (event) => event.stopPropagation());
     }
     const headings = [items.some((item) => item.kind === "model") ? "Modelos" : "", odata ? "OData" : "", controllerItems.length ? "Controladores" : ""].filter(Boolean);
     add(content, "div", "hover-heading", headings.join(headings.length === 2 ? " y " : " · "));
-    add(content, "div", "hover-name", controllerOnly && !eventItems.length ? entry.scope.split("/").pop() : entry.controlType.split(".").pop());
+    const type = entry.controlType.split(".").pop(), label = controlLabel(entry.roots[0]);
+    add(content, "div", "hover-name", controllerOnly && !eventItems.length ? entry.scope.split("/").pop() : label ? `${label} · ${type}` : type);
     add(content, "div", "hover-id", card.dataset.controlId);
     if (entry.scope) add(content, "div", "hover-scope", entry.scope);
     let omitted = 0;
+    const previewLimit = 2;
+    if (entry.bindings.length) {
+      const section = add(content, "div", "hover-section", "");
+      add(section, "div", "hover-section-title", "Bindings del elemento");
+      for (const binding of pinned ? entry.bindings : entry.bindings.slice(0, previewLimit)) {
+        const row = add(section, "div", "hover-row", "");
+        add(row, "strong", "", `${binding.property} ← ${binding.model || "(por defecto)"}`);
+        add(row, "code", "", binding.resolved || `${binding.path} [sin contexto]`);
+        if (pinned && binding.resolved && binding.path !== binding.resolved) add(row, "code", "", `Ruta relativa: ${binding.path}`);
+      }
+      omitted += Math.max(0, entry.bindings.length - previewLimit);
+    }
+    if (entry.models.length) {
+      const section = add(content, "div", "hover-section", "");
+      add(section, "div", "hover-section-title", entry.bindings.length ? "Modelos asociados" : "Modelos disponibles en esta ventana");
+      for (const model of pinned ? entry.models : entry.models.slice(0, previewLimit)) {
+        const row = add(section, "div", "hover-row", "");
+        add(row, "strong", "", `${model.label} · ${model.version || model.type.split(".").pop()}`);
+        if (odata && model.odata) add(row, "code", "", model.service || "Servicio no disponible");
+        if (pinned) {
+          add(row, "code", "", model.type);
+          if (odata && model.dataSource) add(row, "code", "", `Data source: ${model.dataSource}`);
+          if (model.context) add(row, "code", "", `Contexto: ${model.context}`);
+        }
+      }
+      omitted += Math.max(0, entry.models.length - previewLimit);
+    }
+
+    // Keep source names and paths in one shared list. Listeners outside the
+    // associated controller set still retain their own source, once per module.
+    const controllers = new Map();
+    const controllerKey = (name, path) => `${name}|${path || ""}`;
+    for (const association of controllerItems) for (const controller of association.controllers) {
+      controllers.set(controllerKey(controller.name, controller.path), controller);
+    }
+    const handlerSources = new Set();
+    for (const item of eventItems) for (const event of item.events) for (const handler of event.handlers) {
+      const key = controllerKey(handler.controller, handler.path);
+      handlerSources.add(key);
+      if (!controllers.has(key)) controllers.set(key, { name: handler.controller, path: handler.path });
+    }
     for (const item of eventItems) {
       const section = add(content, "div", "hover-section", "");
-      add(section, "div", "hover-section-title", "Eventos y subrutinas");
-      for (const event of pinned ? item.events : item.events.slice(0, 4)) {
+      add(section, "div", "hover-section-title", "Eventos y métodos asociados");
+      for (const event of pinned ? item.events : item.events.slice(0, previewLimit)) {
         const row = add(section, "div", "hover-row", "");
         add(row, "strong", "", event.name);
-        add(row, "code", "", `Parámetros del evento: ${event.parameters.map((param) => `${param.name}: ${param.type}`).join(", ") || "sin parámetros declarados"}`);
-        for (const handler of pinned ? event.handlers : event.handlers.slice(0, 4)) {
-          add(row, "code", "", `→ ${handler.controller} · ${handler.name}(${handler.arguments})`);
-          if (handler.path) add(row, "code", "", handler.path);
+        if (pinned) add(row, "code", "", `Parámetros del evento: ${event.parameters.map((param) => `${param.name}: ${param.type}`).join(", ") || "sin parámetros declarados"}`);
+        for (const handler of pinned ? event.handlers : event.handlers.slice(0, 1)) {
+          const owner = handlerSources.size > 1 ? `${handler.controller} · ` : "";
+          add(row, "code", "", `→ ${owner}${handler.name}(${handler.arguments})`);
           if (pinned) {
             if (handler.declaration) add(row, "code", "", `XML: ${handler.declaration}`);
             add(row, "code", "", handler.resolution);
@@ -404,55 +560,35 @@
             });
           }
         }
-        omitted += Math.max(0, event.handlers.length - 4);
+        omitted += Math.max(0, event.handlers.length - 1);
       }
-      omitted += Math.max(0, item.events.length - 4);
+      omitted += Math.max(0, item.events.length - previewLimit);
     }
-    if (entry.bindings.length) {
-      const section = add(content, "div", "hover-section", "");
-      add(section, "div", "hover-section-title", "Bindings del elemento");
-      for (const binding of pinned ? entry.bindings : entry.bindings.slice(0, 4)) {
-        const row = add(section, "div", "hover-row", "");
-        add(row, "strong", "", `${binding.property} ← ${binding.model || "(por defecto)"}`);
-        add(row, "code", "", binding.resolved || `${binding.path} [sin contexto]`);
-        if (pinned && binding.resolved && binding.path !== binding.resolved) add(row, "code", "", `Ruta relativa: ${binding.path}`);
-      }
-      omitted += Math.max(0, entry.bindings.length - 4);
-    }
-    if (entry.models.length) {
-      const section = add(content, "div", "hover-section", "");
-      add(section, "div", "hover-section-title", entry.bindings.length ? "Modelos asociados" : "Modelos disponibles en esta ventana");
-      for (const model of pinned ? entry.models : entry.models.slice(0, 4)) {
-        const row = add(section, "div", "hover-row", "");
-        add(row, "strong", "", `${model.label} · ${model.version || model.type.split(".").pop()}`);
-        if (odata && model.odata) add(row, "code", "", model.service || "Servicio no disponible");
-        if (pinned) {
-          add(row, "code", "", model.type);
-          if (odata && model.dataSource) add(row, "code", "", `Data source: ${model.dataSource}`);
-          if (model.context) add(row, "code", "", `Contexto: ${model.context}`);
-        }
-      }
-      omitted += Math.max(0, entry.models.length - 4);
-    }
-    for (const association of controllerItems) {
+    if (controllerItems.length) {
       const section = add(content, "div", "hover-section", "");
       add(section, "div", "hover-section-title", "Controladores asociados");
-      add(section, "div", "hover-row", `${association.scope} · ${association.association}`);
-      if (association.ownerView) add(section, "div", "hover-scope", `Vista: ${association.ownerView}`);
-      if (!association.controllers.length) add(section, "div", "hover-row", association.controllerStatus);
-      for (const controller of pinned ? association.controllers : association.controllers.slice(0, 4)) {
-        const row = add(section, "div", "hover-row", "");
-        add(row, "strong", "", `${controller.name} · ${controller.role}`);
-        add(row, "code", "", controller.path);
-        if (pinned) add(row, "code", "", `Ruta: ${controller.pathSource}`);
+      if (pinned) {
+        const associations = new Set();
+        for (const association of controllerItems) {
+          const description = [association.association, association.scope !== entry.scope ? association.scope : "", association.ownerView ? `Vista: ${association.ownerView}` : "", !association.controllers.length ? association.controllerStatus : ""].filter(Boolean).join(" · ");
+          if (description && !associations.has(description)) { add(section, "div", "hover-row", description); associations.add(description); }
+        }
       }
-      omitted += Math.max(0, association.controllers.length - 4);
+      if (!controllers.size && !pinned) add(section, "div", "hover-row", controllerItems[0].controllerStatus);
+      const sources = [...controllers.values()];
+      for (const controller of pinned ? sources : sources.slice(0, 1)) {
+        const row = add(section, "div", "hover-row", "");
+        add(row, "strong", "", [controller.name, controller.role].filter(Boolean).join(" · "));
+        if (controller.path) add(row, "code", "", controller.path);
+        if (pinned && controller.pathSource) add(row, "code", "", `Ruta: ${controller.pathSource}`);
+      }
+      omitted += Math.max(0, sources.length - 1);
     }
-    add(card, "div", "hover-note", pinned ? "Selecciona el texto y usa Ctrl+C · Ctrl+A selecciona el contenido de esta tarjeta" : `${omitted ? `+${omitted} detalles · ` : ""}Alt para fijar y copiar · Alt o Esc para cerrar`);
-    const margin = 12, width = Math.max(0, Math.min(460, innerWidth - margin * 2));
-    card.style.width = `${width}px`;
-    card.style.maxHeight = `${Math.max(0, Math.min(440, innerHeight - margin * 2))}px`;
+    const note = add(card, "div", "hover-note", pinned ? "Ctrl+C copia la selección · Ctrl+A selecciona el contenido de esta tarjeta" : "");
+    const margin = 12;
+    sizeHoverCard(card, Boolean(pinned));
     hoverLayer.append(outline, card);
+    if (!pinned) fitHoverPreview(content, note, omitted);
     const box = card.getBoundingClientRect();
     const anchor = !hovered.located && pointer ? pointer : { x: rect.left + Math.min(rect.width, 40), y: rect.top + Math.min(rect.height, 30) };
     let left = anchor.x + 18, top = anchor.y + 18;
@@ -463,7 +599,7 @@
     if (pinned) {
       pinned.card = card; pinned.outline = outline; pinned.content = content;
       host.removeAttribute("aria-hidden");
-      card.focus({ preventScroll: true });
+      content.focus({ preventScroll: true });
     }
   }
   async function copyCard(content) {
@@ -473,7 +609,7 @@
     textarea.style.cssText = "position:fixed;left:-10000px;top:0";
     content.append(textarea); textarea.select();
     try { if (!document.execCommand("copy")) throw new Error("Clipboard unavailable"); }
-    finally { textarea.remove(); pinned?.card?.focus({ preventScroll: true }); }
+    finally { textarea.remove(); pinned?.content?.focus({ preventScroll: true }); }
   }
   function pinHovered() {
     if (pinned || !preferences.enabled || !inspectionEnabled()) return Boolean(pinned);
@@ -499,6 +635,7 @@
     });
   }
   function onPointerMove(event) {
+    if (event.isTrusted && Boolean(event.ctrlKey) !== discoveryActive) requestHighlights(Boolean(event.ctrlKey));
     if (pinned) return;
     if (event.pointerType === "touch" || !inspectionEnabled()) return;
     pointer = { x: event.clientX, y: event.clientY };
@@ -509,8 +646,13 @@
     if (pinned) return;
     if (!event.relatedTarget || event.relatedTarget.tagName === "IFRAME") { pointer = null; dismissedNode = null; queueHover(); }
   }
-  function onBlur() { if (!pinned) { pointer = null; dismissedNode = null; queueHover(); } }
+  function onBlur() {
+    if (discoveryActive) requestHighlights(false);
+    if (!pinned) { pointer = null; dismissedNode = null; queueHover(); }
+  }
+  function onVisibilityChange() { if (document.hidden) onBlur(); }
   function onKeyDown(event) {
+    if (event.key === "Control" && !event.repeat) requestHighlights(true);
     if (event.key === "Escape") {
       // Consume this key sequence only while closing an inspector card. In
       // particular, held-key repeats must not leak through to a UI5 dialog.
@@ -533,6 +675,7 @@
     }
   }
   function onKeyUp(event) {
+    if (event.key === "Control") requestHighlights(Boolean(event.ctrlKey));
     if (event.key === "Escape" && handledEscape) { event.preventDefault(); event.stopImmediatePropagation(); handledEscape = false; }
     if (event.key === "Alt" && (handledAlt || pinned)) { event.preventDefault(); event.stopPropagation(); handledAlt = false; }
   }
@@ -566,6 +709,7 @@
       window.addEventListener("keydown", onKeyDown, true);
       window.addEventListener("keyup", onKeyUp, true);
       window.addEventListener("blur", onBlur);
+      document.addEventListener("visibilitychange", onVisibilityChange);
       timer = setInterval(() => { if (!document.hidden) schedule(true); }, 900);
       collect();
     }
@@ -581,9 +725,11 @@
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (discoveryActive) requestHighlights(false);
       releasePinned(); handledAlt = false; handledEscape = false;
       pointer = null; dismissedNode = null; activeHoverNode = null;
-      host?.remove(); host = null; layer = null; hoverLayer = null;
+      host?.remove(); host = null; layer = null; discoveryLayer = null; hoverLayer = null;
     } else schedule(true);
     return preferences;
   }
@@ -617,7 +763,7 @@
     if (!pinned && !hoverLayer?.querySelector(".hover-card")) return;
     dismissedNode = pinned?.node || activeHoverNode; releasePinned(); selected = ""; activeHoverNode = null; hoverLayer?.replaceChildren();
   }
-  const api = Object.freeze({ snapshot, setOptions, focus, isPinned: () => Boolean(pinned), pin: pinHovered, release: releaseCard });
+  const api = Object.freeze({ snapshot, setOptions, focus, isPinned: () => Boolean(pinned), pin: pinHovered, release: releaseCard, highlightTargets });
   Object.defineProperty(window, "__UI5_TECH_LENS__", { value: api, configurable: true });
   window.addEventListener("message", (event) => {
     if (event.source === window && event.data?.channel === "ui5-lens:options") setOptions(event.data.options);

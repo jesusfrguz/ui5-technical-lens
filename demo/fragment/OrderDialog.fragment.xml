@@ -1,6 +1,6 @@
 <core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
   <Dialog id="orderDialog" title="Detalle del pedido" contentWidth="480px">
-    <content><VBox class="sapUiMediumMargin" binding="{sales>/Orders('4500001234')}"><Title text="Pedido 4500001234"/><Text text="Este diálogo se crea con Controller.loadFragment()."/><Label text="Cliente · OData V2"/><Input id="dialogCustomerField" value="{sales>CustomerName}"/><Text text="Su etiqueta debe mostrar OrderDialog.fragment.xml." class="sapUiSmallMarginTop"/></VBox></content>
+    <content><VBox class="sapUiMediumMargin" binding="{sales>/Orders('4500001234')}"><Title text="Pedido 4500001234"/><Text text="Este diálogo se crea con Controller.loadFragment()."/><Label text="Cliente · OData V2" labelFor="dialogCustomerField"/><Input id="dialogCustomerField" value="{sales>CustomerName}"/><Text text="Su etiqueta debe mostrar OrderDialog.fragment.xml." class="sapUiSmallMarginTop"/></VBox></content>
     <endButton><Button text="Cerrar" press="onCloseDialog"/></endButton>
   </Dialog>
 </core:FragmentDefinition>

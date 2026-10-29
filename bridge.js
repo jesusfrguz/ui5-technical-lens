@@ -13,7 +13,9 @@
     if (stopped) return;
     stopped = true; current = null;
     window.removeEventListener("message", onPageMessage);
-    try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch { /* The old runtime may already be gone. */ }
+    // Stop is terminal for an invalidated context. Do not call extension APIs
+    // even to remove their listeners; Chrome owns their invalidated lifetime.
+    // A pending runtime callback is harmless because it checks stopped first.
   }
   async function request(action, extra = {}) {
     try {
@@ -22,7 +24,7 @@
       // synchronously, before sendMessage can return a promise to .catch().
       return await chrome.runtime.sendMessage({ channel: "ui5-lens", action, ...extra });
     } catch (error) {
-      const invalid = !available() || /extension context invalidated/i.test(error?.message || "");
+      const invalid = /extension context invalidated/i.test(error?.message || "") || !available();
       if (invalid) stop();
       return { error: invalid ? reloadMessage : error?.message || "No se pudo conectar con la extensión." };
     }
@@ -36,6 +38,9 @@
     if (event.data?.channel === "ui5-lens:ready") send();
     if (event.data?.channel === "ui5-lens:hover-request" && event.data.command === "toggle") {
       void request("hoverCommand", { command: "toggle" });
+    }
+    if (event.data?.channel === "ui5-lens:highlight-request" && typeof event.data.active === "boolean") {
+      void request("highlightTargets", { active: event.data.active });
     }
     if (event.data?.channel === "ui5-lens:source-request" && /^h[a-f0-9]{32}_\d+$/.test(event.data.token)) {
       const token = event.data.token;
