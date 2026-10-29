@@ -7,8 +7,7 @@ $taskFiles = @('manifest.json', 'background.js', 'bridge.js', 'core.js', 'data-i
 foreach ($taskFile in $taskFiles) { Copy-Item -LiteralPath (Join-Path $taskRoot $taskFile) -Destination $taskPackage -Recurse -Force }
 Compress-Archive -Path (Join-Path $taskPackage '*') -DestinationPath (Join-Path $taskDist 'UI5-Technical-Lens.zip') -Force
 $taskVersion = (Get-Content -LiteralPath (Join-Path $taskRoot 'manifest.json') -Raw | ConvertFrom-Json).version
-$taskDownloads = Join-Path $taskRoot 'downloads'
-New-Item -ItemType Directory -Force -Path $taskDownloads | Out-Null
-Copy-Item -LiteralPath (Join-Path $taskDist 'UI5-Technical-Lens.zip') -Destination (Join-Path $taskDownloads "UI5-Technical-Lens-$taskVersion.zip") -Force
+$taskVersionedZip = Join-Path $taskDist "UI5-Technical-Lens-$taskVersion.zip"
+Copy-Item -LiteralPath (Join-Path $taskDist 'UI5-Technical-Lens.zip') -Destination $taskVersionedZip -Force
 Write-Output (Join-Path $taskDist 'UI5-Technical-Lens.zip')
-Write-Output (Join-Path $taskDownloads "UI5-Technical-Lens-$taskVersion.zip")
+Write-Output $taskVersionedZip

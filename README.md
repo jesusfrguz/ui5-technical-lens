@@ -4,7 +4,7 @@ Extensión de Chrome (Manifest V3) que muestra los ficheros técnicos de las vis
 
 Creada por **Jesús Franco Guzmán** · [LinkedIn](https://es.linkedin.com/in/jesus-franco-guzman).
 
-[Descargar la extensión 1.5.3 lista para instalar](downloads/UI5-Technical-Lens-1.5.3.zip).
+[Descargar la última versión lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/releases/latest/download/UI5-Technical-Lens.zip) · [Versiones y notas de publicación](https://github.com/jesusfrguz/ui5-technical-lens/releases).
 
 La versión **1.5.3** incorpora las tarjetas de inspección mejoradas y el resaltado temporal con **Ctrl**, y evita consultar la API de la extensión durante la limpieza de un contexto invalidado. Mantiene la búsqueda de métodos para listeners enlazados, como `bound onValueHelp`, y la navegación a fichero, línea y columna en DevTools. Para actualizar, sustituye los archivos de la instalación descomprimida por los del ZIP nuevo, pulsa **Recargar** en `chrome://extensions` o `edge://extensions`, comprueba que aparece **1.5.3**, recarga después la pestaña de la app y cierra/vuelve a abrir DevTools. Si cargas `dist/UI5-Technical-Lens`, ejecuta `npm run package` después de cambiar el código para actualizar esa copia.
 
@@ -124,7 +124,17 @@ npm run test:reload
 npm run package
 ```
 
-Las pruebas de navegador usan un perfil temporal aislado con la extensión real, sin modificar tu perfil personal de Chrome. Generan capturas en `test-results/`. El paquete de `dist` contiene únicamente los archivos necesarios para la extensión y su documentación; excluye la demo, las pruebas y las dependencias. `npm run test:reload` recarga realmente el runtime de la extensión con una página abierta y comprueba que los mensajes del puente caducado no producen excepciones y que la comunicación funciona después de recargar la página. `npm run test:devtools` abre el frontend real de DevTools en un navegador headless y verifica el archivo y la selección del editor Sources, incluyendo métodos homónimos, cuerpos idénticos, columnas minificadas, sourceURL e iframes de URL idéntica.
+Las pruebas de navegador usan un perfil temporal aislado con la extensión real, sin modificar tu perfil personal de Chrome. Generan capturas en `test-results/`. El paquete de `dist` contiene únicamente los archivos necesarios para la extensión y su documentación; excluye la demo, las pruebas y las dependencias. `npm run package` genera allí `UI5-Technical-Lens.zip` y una copia con la versión en el nombre; ambos quedan fuera de Git. `npm run test:reload` recarga realmente el runtime de la extensión con una página abierta y comprueba que los mensajes del puente caducado no producen excepciones y que la comunicación funciona después de recargar la página. `npm run test:devtools` abre el frontend real de DevTools en un navegador headless y verifica el archivo y la selección del editor Sources, incluyendo métodos homónimos, cuerpos idénticos, columnas minificadas, sourceURL e iframes de URL idéntica.
+
+## Publicar una versión
+
+Los instaladores se distribuyen como archivos adjuntos en **GitHub Releases**. El repositorio conserva el código y la documentación; los ZIP se generan en `dist`.
+
+1. Actualiza la versión en `manifest.json`, `package.json` y `package-lock.json`, junto con las novedades del README.
+2. Comprueba los cambios, crea el commit y súbelo a `main`.
+3. Crea y sube la etiqueta correspondiente, por ejemplo `git tag v1.5.4` y `git push origin v1.5.4`.
+
+El flujo **Publish release** comprueba que la etiqueta coincide con la versión, instala las dependencias, ejecuta las pruebas unitarias y genera el paquete. Después prepara la release como borrador, adjunta `UI5-Technical-Lens.zip` y la publica. El enlace de descarga del README apunta siempre a la última versión. El flujo también se puede ejecutar manualmente desde Actions para una etiqueta existente.
 
 Si Windows bloquea el ejecutable descargado de Chromium, se puede usar Edge instalado para la misma prueba: `$env:UI5_TEST_BROWSER = 'msedge'; npm run test:browser`. La verificación realizada en este entorno usó Edge/Chromium con la extensión real y SAPUI5 1.120.x.
 
