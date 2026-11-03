@@ -867,6 +867,12 @@
     if (!pinned) { pointer = null; dismissedNode = null; queueHover(); }
   }
   function onVisibilityChange() { if (document.hidden) onBlur(); }
+  function onInspectorInteraction(event) {
+    // The closed shadow root retargets events to the overlay host. Isolate them
+    // before app capture handlers cancel selection or a modal UI5 popup redirects
+    // focus to an underlying field. Preserve native selection, focus and clicks.
+    if (pinned && event.target === host) event.stopPropagation();
+  }
   function onKeyDown(event) {
     if (event.key === "Control" && !event.repeat) requestHighlights(true);
     if (event.key === "Escape") {
@@ -937,6 +943,10 @@
       document.addEventListener("pointerout", onPointerOut, true);
       document.addEventListener("mousemove", onPointerMove, true);
       document.addEventListener("mouseout", onPointerOut, true);
+      window.addEventListener("pointerdown", onInspectorInteraction, true);
+      window.addEventListener("mousedown", onInspectorInteraction, true);
+      window.addEventListener("focus", onInspectorInteraction, true);
+      window.addEventListener("focusin", onInspectorInteraction, true);
       window.addEventListener("keydown", onKeyDown, true);
       window.addEventListener("keyup", onKeyUp, true);
       window.addEventListener("blur", onBlur);
@@ -955,6 +965,10 @@
       document.removeEventListener("pointerout", onPointerOut, true);
       document.removeEventListener("mousemove", onPointerMove, true);
       document.removeEventListener("mouseout", onPointerOut, true);
+      window.removeEventListener("pointerdown", onInspectorInteraction, true);
+      window.removeEventListener("mousedown", onInspectorInteraction, true);
+      window.removeEventListener("focus", onInspectorInteraction, true);
+      window.removeEventListener("focusin", onInspectorInteraction, true);
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onBlur);

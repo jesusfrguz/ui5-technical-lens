@@ -546,13 +546,51 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     assert.ok(!cardText.includes("CustomerName"), "Hover changes without stale field details");
     await page.getByRole("button", { name: "Abrir diálogo" }).click();
     await page.getByRole("dialog").waitFor();
+    // The dialog sets its initial focus at the end of its opening animation.
+    // Start inspection after that transition, as in an already-open app popup.
+    await page.waitForFunction(() => {
+      const dialog = Object.values(sap.ui.require("sap/ui/core/Element").registry.all()).find((control) => control.getId().endsWith("--orderDialog"));
+      return dialog?.oPopup?.getOpenState() === "OPEN";
+    });
+    await page.locator('[id$="--dialogCustomerField-inner"]').click();
     await page.locator('[id$="--dialogCustomerField-inner"]').hover();
     await page.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card")?.dataset.controlId.endsWith("--dialogCustomerField"));
     await page.keyboard.press("Alt");
     await page.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card.pinned"));
+    // A modal UI5 popup traps focus outside its DOM. The inspector lives in a
+    // closed shadow root alongside it and must keep focus while selecting JSON.
+    await openBindingValues();
+    assert.ok(await page.evaluate(() => {
+      const shadow = window.__testLensShadow;
+      return document.activeElement.id === "ui5-technical-lens-overlay" && shadow.activeElement === shadow.querySelector(".json-line.target");
+    }), "The values dialog retains focus above the modal UI5 popup");
+    const popupJSONPoints = await page.evaluate(() => {
+      const row = window.__testLensShadow.querySelector(".json-line.target");
+      const key = row.querySelector(".json-key").getBoundingClientRect(), value = row.querySelector(".json-string").getBoundingClientRect();
+      return { x1: key.left + 1, x2: value.right - 1, y: key.top + key.height / 2 };
+    });
+    await page.mouse.move(popupJSONPoints.x1, popupJSONPoints.y); await page.mouse.down();
+    await page.mouse.move(popupJSONPoints.x2, popupJSONPoints.y, { steps: 12 }); await page.mouse.up();
+    const popupJSONSelection = await page.evaluate(() => getSelection().toString());
+    assert.ok(popupJSONSelection.includes("CustomerName") && popupJSONSelection.includes("Cliente demo"), `Dragging on JSON above a UI5 modal selects JSON instead of the underlying input: ${JSON.stringify(popupJSONSelection)}`);
+    assert.ok(await page.evaluate(() => document.activeElement.id === "ui5-technical-lens-overlay"), "Dragging keeps focus in the inspector");
+    await page.keyboard.press("Control+c");
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), popupJSONSelection, "Ctrl+C copies the JSON selection above a UI5 modal");
+    await page.screenshot({ path: path.join(output, "binding-json-over-ui5-dialog.png") });
+    await page.keyboard.press("Tab");
+    assert.ok(await page.evaluate(() => {
+      const shadow = window.__testLensShadow;
+      return document.activeElement.id === "ui5-technical-lens-overlay" && shadow.querySelector(".values-dialog").contains(shadow.activeElement);
+    }), "Tab retains focus inside model values above a UI5 modal");
+    await page.keyboard.press("Escape");
+    assert.ok(await page.evaluate(() => {
+      const shadow = window.__testLensShadow;
+      return document.activeElement.id === "ui5-technical-lens-overlay" && shadow.activeElement.classList.contains("binding-values");
+    }), "Closing values restores focus to the binding above the UI5 modal");
     await page.keyboard.press("Alt");
     await page.waitForFunction(() => !window.__testLensShadow?.querySelector(".hover-card.pinned"));
     assert.ok(await page.getByRole("dialog").isVisible(), "Pin/unpin doesn't close the application popup");
+    assert.ok(await page.locator('[id$="--dialogCustomerField-inner"]').evaluate((node) => document.activeElement === node), "Unpin restores focus to the original field in the UI5 popup");
     await page.locator('[id$="--dialogCustomerField-inner"]').hover();
     await page.keyboard.press("Alt");
     await page.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card.pinned"));
@@ -633,6 +671,13 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     jsonState = await jsonFocusState(); assert.ok(jsonState.focused && jsonState.visible && jsonState.scrolled, "Ir al valor returns to the target after manual scrolling");
     await page.screenshot({ path: path.join(output, "binding-json-focused.png") });
     // Native drags across tokens and lines select text; folding only uses the gutter button.
+    // Some host apps cancel presses during document capture, before the dialog's
+    // bubbling listeners can isolate them. Keep native selection working there.
+    await page.evaluate(() => {
+      window.__testBlockedPresses = 0;
+      window.__testCancelPress = (event) => { window.__testBlockedPresses++; event.preventDefault(); };
+      for (const type of ["pointerdown", "mousedown"]) document.addEventListener(type, window.__testCancelPress, true);
+    });
     const dragJSON = async (multiline) => {
       const points = await page.evaluate((multi) => {
         const target = window.__testLensShadow.querySelector(".json-line.target");
@@ -650,7 +695,10 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.keyboard.press("Control+c");
     assert.ok((await page.evaluate(() => navigator.clipboard.readText())).includes("enabled"), "Native Ctrl+C copies a multi-line drag selection");
     assert.ok(await page.evaluate(() => window.__testLensShadow.querySelector('.json-view:last-child [data-line="1199"] .json-toggle').getAttribute("aria-expanded") === "true"), "Dragging text doesn't fold nodes");
+    assert.equal(await page.evaluate(() => window.__testBlockedPresses), 0, "Inspector presses never reach the host app's capture handlers");
     await page.screenshot({ path: path.join(output, "binding-json-selection.png") });
+    await page.mouse.click(5, 5);
+    assert.equal(await page.evaluate(() => window.__testBlockedPresses), 0, "The values backdrop also isolates presses");
     await page.evaluate(() => getSelection().removeAllRanges());
     const clickJSON = async (lineOrAction) => {
       const point = await page.evaluate((key) => {
@@ -691,7 +739,15 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.screenshot({ path: path.join(output, "binding-json-folded.png") });
     await clickJSON("expand"); await clickLocateValue();
     assert.deepEqual(await jsonFocusState(), jsonState, "Expand all restores the JSON text and original line numbers");
-    await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
+    assert.equal(await page.evaluate(() => window.__testBlockedPresses), 0, "Folding, locating and copying still work with host capture handlers");
+    await page.keyboard.press("Escape");
+    await page.mouse.click(5, 5);
+    assert.ok(await page.evaluate(() => window.__testBlockedPresses > 0), "Presses outside the pinned inspector still reach the app");
+    await page.evaluate(() => {
+      for (const type of ["pointerdown", "mousedown"]) document.removeEventListener(type, window.__testCancelPress, true);
+      delete window.__testCancelPress; delete window.__testBlockedPresses;
+    });
+    await page.keyboard.press("Escape");
     await page.evaluate(() => {
       const field = Object.values(sap.ui.require("sap/ui/core/Element").registry.all()).find((control) => control.getId().endsWith("--noteField"));
       field.bindProperty("value", "/note"); field.setModel(null, "focusTest"); window.__testFocusModel.destroy(); delete window.__testFocusModel;
