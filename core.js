@@ -30,7 +30,46 @@
     const base = name.replace(/\.controller\.js$/, "");
     return `${base.replace(/\./g, "/")}.controller.js`;
   }
-  const api = Object.freeze({ defaults, options, path, controllerPath, intersect });
+  // Disjoint visible regions: overlapping popup holes must never cancel out.
+  function uncoveredRects(rect, blockers) {
+    let regions = [rect];
+    for (const blocker of blockers) {
+      regions = regions.flatMap((area) => {
+        const shared = intersect(area, blocker);
+        if (!shared) return [area];
+        return [
+          { left: area.left, top: area.top, right: area.right, bottom: shared.top },
+          { left: area.left, top: shared.bottom, right: area.right, bottom: area.bottom },
+          { left: area.left, top: shared.top, right: shared.left, bottom: shared.bottom },
+          { left: shared.right, top: shared.top, right: area.right, bottom: shared.bottom }
+        ].filter((piece) => piece.right > piece.left && piece.bottom > piece.top);
+      });
+    }
+    return regions;
+  }
+  // Resolve by path, never by value: several properties may contain identical values.
+  function jsonLines(text, targetPath = null) {
+    let root;
+    try { root = JSON.parse(text); } catch { return { lines: [String(text)], targetLine: null, nodes: [] }; }
+    const lines = [], nodes = [];
+    let targetLine = null;
+    function visit(value, segments, indent, prefix = "", comma = "") {
+      if (Array.isArray(targetPath) && segments.length === targetPath.length && segments.every((part, index) => part === targetPath[index])) targetLine = lines.length + 1;
+      const space = "  ".repeat(indent);
+      if (value === null || typeof value !== "object") { lines.push(`${space}${prefix}${JSON.stringify(value)}${comma}`); return; }
+      const array = Array.isArray(value), entries = Object.entries(value);
+      if (!entries.length) { lines.push(`${space}${prefix}${array ? "[]" : "{}"}${comma}`); return; }
+      const node = { startLine: lines.length + 1, endLine: null, path: segments, size: entries.length, array };
+      nodes.push(node);
+      lines.push(`${space}${prefix}${array ? "[" : "{"}`);
+      entries.forEach(([key, child], index) => visit(child, [...segments, key], indent + 1, array ? "" : `${JSON.stringify(key)}: `, index < entries.length - 1 ? "," : ""));
+      lines.push(`${space}${array ? "]" : "}"}${comma}`);
+      node.endLine = lines.length;
+    }
+    visit(root, [], 0);
+    return { lines, targetLine, nodes };
+  }
+  const api = Object.freeze({ defaults, options, path, controllerPath, intersect, jsonLines, uncoveredRects });
   if (typeof module === "object" && module.exports) module.exports = api;
   else if (!window.__UI5_TECH_LENS_CORE__) Object.defineProperty(window, "__UI5_TECH_LENS_CORE__", { value: api, configurable: true });
 })();

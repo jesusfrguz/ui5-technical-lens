@@ -8,6 +8,7 @@
   let preferences = H.options(), host, layer, discoveryLayer, hoverLayer, observer, timer, runtimeTimer, frameRequest, hoverRequest, lastScan = 0;
   let pointer = null, dismissedNode = null, activeHoverNode = null;
   let pinned = null, handledAlt = false, handledEscape = false;
+  let valuesDialog = null;
   let discoveryActive = false;
   let dataTargets = new Map();
   let entries = [], controls = [], hooksInstalled = false, loadingModules = false, selected = "";
@@ -20,6 +21,9 @@
   const moduleValue = (name) => safe(() => window.sap?.ui?.require?.(name));
   const isView = (control) => safe(() => control.isA("sap.ui.core.mvc.View"), false);
   const controlId = (control) => safe(() => control.getId(), "");
+  const trackingStarted = performance.now();
+  const weakRef = (value) => value && (typeof value === "object" || typeof value === "function") ? new WeakRef(value) : null;
+  let lastFragmentCleanup = -Infinity;
 
   function remember(content, name, type, source = "capturado", context = {}) {
     if (typeof name !== "string" || !name) return;
@@ -27,10 +31,21 @@
     if (!roots.length) return;
     const key = `${name}|${roots.map(controlId).sort().join("|")}`;
     const previous = fragments.get(key);
-    fragments.set(key, { ...previous, key, name, type: type || "XML", roots, source,
+    fragments.set(key, { ...previous, key, name, type: type || "XML", rootRefs: roots.map((root) => new WeakRef(root)), source,
       controllerKnown: context.controllerKnown || previous?.controllerKnown || false,
-      controller: context.controllerKnown ? context.controller : previous?.controller,
-      containingView: context.containingView || previous?.containingView });
+      controllerRef: context.controllerKnown ? weakRef(context.controller) : previous?.controllerRef,
+      containingViewRef: context.containingView ? weakRef(context.containingView) : previous?.containingViewRef });
+    // Capture also runs with labels off. Release destroyed roots without retaining
+    // controls/controllers for the lifetime of a long-running application.
+    if (performance.now() - lastFragmentCleanup > 1000) {
+      lastFragmentCleanup = performance.now();
+      for (const [storedKey, record] of fragments) {
+        if (!record.rootRefs.some((ref) => {
+          const root = ref.deref();
+          return root && !safe(() => root.isDestroyed(), root.bIsDestroyed || root._bIsBeingDestroyed || false);
+        })) fragments.delete(storedKey);
+      }
+    }
     schedule(true);
   }
 
@@ -80,8 +95,8 @@
     // Wait for Core initialization and its library preloads. Requesting Fragment
     // during the bootstrap can race the preload and break optimized deployments
     // where only Fragment-dbg.js and the bundle are served individually.
-    const initialized = safe(() => sap.ui.getCore().isInitialized(), false);
-    if (!hooksInstalled && !loadingModules && initialized) {
+    const initialized = !hooksInstalled && !loadingModules && safe(() => sap.ui.getCore().isInitialized(), false);
+    if (initialized) {
       loadingModules = true;
       // Async only; never use requireSync or change UI5 configuration.
       safe(() => sap.ui.require(["sap/ui/core/Fragment", "sap/ui/core/Element"], () => {
@@ -89,6 +104,19 @@
       }, () => { loadingModules = false; }));
     }
   }
+
+  function watchRuntime() {
+    clearTimeout(runtimeTimer);
+    ensureRuntime();
+    if (hooksInstalled) {
+      document.removeEventListener("load", onRuntimeScript, true);
+      return;
+    }
+    // Capture is independent of labels; don't scan controls or read models here.
+    // Slow down on non-UI5 pages, but keep supporting a delayed app bootstrap.
+    runtimeTimer = setTimeout(watchRuntime, performance.now() - trackingStarted < 20000 ? 25 : 250);
+  }
+  function onRuntimeScript(event) { if (event.target?.tagName === "SCRIPT") watchRuntime(); }
 
   function allControls() {
     const Element = moduleValue("sap/ui/core/Element") || window.sap?.ui?.core?.Element;
@@ -116,14 +144,14 @@
   function visibleRect(element) {
     if (!element?.isConnected || !element.getClientRects().length) return null;
     let rect = H.intersect(element.getBoundingClientRect(), { left: 0, top: 0, right: innerWidth, bottom: innerHeight });
-    let escapesClipping = false;
+    let escapingPosition = "";
     for (let node = element; rect && node; node = node.parentElement) {
       const style = getComputedStyle(node);
       if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0) return null;
-      // Fixed popups escape static overflow ancestors (notably #sap-ui-static,
-      // whose UI5 box is 0×0). A transformed containing block restores clipping.
-      if (node !== element && (style.transform !== "none" || style.perspective !== "none" || style.filter !== "none" || /paint|layout|strict|content/.test(style.contain))) escapesClipping = false;
-      if (!escapesClipping && node !== element && /(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+      // Out-of-flow popups escape static overflow ancestors (#sap-ui-static is
+      // 0×0). A containing block restores clipping for absolute/fixed content.
+      if (node !== element && ((escapingPosition === "absolute" && style.position !== "static") || style.transform !== "none" || style.perspective !== "none" || style.filter !== "none" || /paint|layout|strict|content/.test(style.contain))) escapingPosition = "";
+      if (!escapingPosition && node !== element && /(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
         const box = node.getBoundingClientRect();
         rect = H.intersect(rect, {
           left: /(auto|scroll|hidden|clip)/.test(style.overflowX) ? box.left : -Infinity,
@@ -132,7 +160,7 @@
           bottom: /(auto|scroll|hidden|clip)/.test(style.overflowY) ? box.bottom : Infinity
         });
       }
-      if (style.position === "fixed") escapesClipping = true;
+      if (style.position === "fixed" || style.position === "absolute") escapingPosition = style.position;
     }
     return rect;
   }
@@ -154,10 +182,10 @@
       if (info?.fragmentName) remember(control, info.fragmentName, "XML", "origen UI5");
     }
     for (const [key, record] of fragments) {
-      const roots = record.roots.filter((control) => !safe(() => control.isDestroyed(), control.bIsDestroyed || control._bIsBeingDestroyed || false));
+      const roots = record.rootRefs.map((ref) => ref.deref()).filter((control) => control && !safe(() => control.isDestroyed(), control.bIsDestroyed || control._bIsBeingDestroyed || false));
       if (!roots.length) { fragments.delete(key); continue; }
-      record.roots = roots;
-      next.push({ ...record, key: `fragment:${key}`, kind: "fragment", path: H.path(record.name, "fragment", record.type) });
+      next.push({ ...record, roots, controller: record.controllerRef?.deref(), containingView: record.containingViewRef?.deref(),
+        key: `fragment:${key}`, kind: "fragment", path: H.path(record.name, "fragment", record.type) });
     }
     const sourceEntries = [...next];
     if (preferences.models || preferences.odatas) {
@@ -230,6 +258,38 @@
     lastScan = performance.now();
   }
 
+  function popupStack() {
+    // Popup marks its real DOM root, including dialogs, popovers and menus.
+    // Read DOM order and CSS z-index; don't change the application's stacking.
+    return [...document.querySelectorAll("[data-sap-ui-popup]")].map((node) => ({
+      node, rect: visibleRect(node), z: Number.parseFloat(getComputedStyle(node).zIndex) || 0
+    })).filter((popup) => popup.rect).sort((a, b) => a.z - b.z);
+  }
+  function popupOwner(node, stack) {
+    return stack.findLastIndex((popup) => popup.node.contains(node));
+  }
+  function maskAnnotations(plane, owner, stack) {
+    const blockers = stack.slice(owner + 1).map(({ rect }) => ({ left: rect.left - 2, top: rect.top - 2, right: rect.right + 2, bottom: rect.bottom + 2 }));
+    plane.dataset.popupId = stack[owner]?.node.id || "";
+    if (!blockers.length) { plane.style.clipPath = "none"; return; }
+    const regions = H.uncoveredRects({ left: 0, top: 0, right: innerWidth, bottom: innerHeight }, blockers);
+    const path = regions.map((rect) => `M${rect.left},${rect.top}H${rect.right}V${rect.bottom}H${rect.left}Z`).join(" ");
+    plane.style.clipPath = path ? `path("${path}")` : "inset(50%)";
+  }
+  function annotationPlanes(output, stack) {
+    const planes = new Map();
+    return (node) => {
+      const owner = popupOwner(node, stack);
+      if (!planes.has(owner)) {
+        const plane = document.createElement("div"); plane.className = "annotation-plane";
+        maskAnnotations(plane, owner, stack); planes.set(owner, plane);
+        // Append in the app's popup order, independently of control discovery order.
+        output.replaceChildren(...[...planes].sort(([a], [b]) => a - b).map(([, plane]) => plane));
+      }
+      return planes.get(owner);
+    };
+  }
+
   function ensureLayer() {
     if (host?.isConnected) return;
     if (!document.documentElement) return;
@@ -244,6 +304,7 @@
     discoveryLayer = document.createElement("div");
     hoverLayer = document.createElement("div");
     style.textContent += `
+      .annotation-plane{position:fixed;inset:0;pointer-events:none}
       .hover-outline{position:fixed;box-sizing:border-box;border:2px solid #168469;border-radius:5px;background:#16846909;pointer-events:none}
       .hover-outline.odata{border-color:#af580d}
       .hover-card{position:fixed;box-sizing:border-box;display:flex;flex-direction:column;background:#fff;color:#173247;border:1px solid #d8e5eb;border-top:3px solid #168469;border-radius:10px;box-shadow:0 8px 30px #17324735;padding:14px 16px;font:13px/1.5 Segoe UI,system-ui,sans-serif;pointer-events:none;overflow:hidden;overflow-wrap:anywhere}
@@ -269,10 +330,37 @@
       .hover-card.pinned ::selection{background:#bfe8f4;color:#173247}
       .hover-actions{flex-shrink:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #e6edf1;font-size:12px;color:#526b7a;user-select:none}
       .hover-actions>span{margin-right:auto}
-      .hover-copy,.hover-close{font:600 12px Segoe UI,system-ui,sans-serif;padding:7px 10px;border:1px solid #c8dce5;border-radius:6px;background:#edf6f9;color:#235b70;cursor:pointer}
+      .hover-copy,.hover-close,.values-locate{font:600 12px Segoe UI,system-ui,sans-serif;padding:7px 10px;border:1px solid #c8dce5;border-radius:6px;background:#edf6f9;color:#235b70;cursor:pointer}
       .hover-close{background:#fff}
-      .hover-copy:focus-visible,.hover-close:focus-visible{outline:2px solid #168469;outline-offset:2px}
+      .hover-copy:focus-visible,.hover-close:focus-visible,.values-locate:focus-visible{outline:2px solid #168469;outline-offset:2px}
       .hover-source-status{font-size:12px;margin-top:4px}
+      .binding-values{display:block;margin-top:6px;text-align:left}
+      .values-backdrop{position:fixed;inset:0;background:#17324755;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;pointer-events:auto!important}
+      .values-dialog{box-sizing:border-box;display:flex;flex-direction:column;width:960px;max-width:100%;max-height:100%;padding:16px;background:white;color:#173247;border:1px solid #c8dce5;border-top:3px solid #168469;border-radius:10px;box-shadow:0 8px 30px #17324755;font:13px/1.5 Segoe UI,system-ui,sans-serif;overflow:hidden;overflow-wrap:anywhere;user-select:text}
+      .values-dialog .hover-actions{margin:0 0 12px}
+      .values-content{min-height:0;overflow:auto;overscroll-behavior:contain;outline:none}
+      .values-content h2{margin:0 0 8px;font-size:18px}
+      .values-content h3{font-size:13px;margin:16px 0 6px}
+      .json-view{font:12px/1.7 Consolas,monospace;background:#f6f9fc;border:1px solid #dce6ee;border-radius:8px;padding:8px 0;color:#53677b}
+      .json-view,.json-code,.json-code span,.json-fold-summary{user-select:text!important;-webkit-user-select:text!important;cursor:text}
+      .json-view ::selection{background:#bfe8f4;color:#173247}
+      .json-line{position:relative;padding:0 12px 0 6em;min-height:1.7em;border-left:3px solid transparent;white-space:pre-wrap;overflow-wrap:anywhere}
+      .json-line:before{content:attr(data-line);position:absolute;left:0;width:3.3em;text-align:right;color:#8393a2;user-select:none;pointer-events:none;font-weight:400}
+      .json-line[hidden],.json-fold-summary[hidden]{display:none!important}
+      .json-toggle{position:absolute;left:3.6em;top:0;width:20px;height:20px;padding:0;border:0;background:transparent;color:#526b7a;font:inherit;cursor:pointer;user-select:none!important;-webkit-user-select:none!important}
+      .json-toggle:before{content:"▾"}.json-toggle[aria-expanded=false]:before{content:"▸"}
+      .json-toggle:hover{background:#dceaf2;border-radius:3px}.json-toggle:focus-visible{outline:2px solid #168469;outline-offset:-2px}
+      .json-fold-summary{color:#718394;font-style:italic}
+      .json-tools{display:flex;justify-content:flex-end;gap:6px;margin:6px 0;user-select:none}
+      .json-tool{font:12px Segoe UI,system-ui,sans-serif;border:1px solid #c8dce5;border-radius:5px;background:white;color:#235b70;padding:4px 8px;cursor:pointer}
+      .json-tool:focus-visible{outline:2px solid #168469;outline-offset:2px}
+      .json-key{color:#14618b}.json-string{color:#287542}.json-number{color:#8e4caa}.json-boolean{color:#ad4e12}.json-null{color:#7a5d8d;font-style:italic}
+      .json-line.target{background:#fff0bf;border-left-color:#c08700;outline:none;color:#604400}
+      .json-line.target:before{color:#926400;font-weight:700}
+      .json-line.target:focus{box-shadow:inset 0 0 0 1px #d1a339}
+      .json-location{font-size:12px;color:#765300;background:#fff5d7;border:1px solid #f0d88b;border-radius:5px;padding:6px 9px;margin:8px 0}
+      .values-locate:disabled{opacity:.5;cursor:default}
+      .values-content:focus-visible{outline:2px solid #168469;outline-offset:-2px}
     `;
     style.textContent += `.hover-card.controller{border-top-color:#5656b8}.hover-card.controller .hover-heading{color:#5656b8}.hover-outline.controller{border-color:#5656b8}`;
     style.textContent += `.controller{--color:#5656b8}.discovery-outline{position:fixed;box-sizing:border-box;border:0;border-radius:5px;outline:2px solid var(--color);background:transparent;pointer-events:none}`;
@@ -287,6 +375,7 @@
     ensureLayer();
     if (!layer) return;
     const output = document.createDocumentFragment(), labels = [];
+    const stack = popupStack(), planeFor = annotationPlanes(output, stack);
     // Only view/fragment file names remain persistent. Data is inspected on hover.
     const drawingEntries = entries.filter((entry) => (entry.kind === "view" || entry.kind === "fragment") && preferences[kindOption[entry.kind]]);
     let boxes = 0;
@@ -295,6 +384,7 @@
       for (const node of nodes) {
         const rect = visibleRect(node);
         if (!rect || boxes++ >= 300) continue;
+        const plane = planeFor(node);
         const box = document.createElement("div"), label = document.createElement("span");
         box.className = `box ${entry.kind}${selected === entry.key || entry.keys?.includes(selected) ? " selected" : ""}`;
         box.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
@@ -308,6 +398,7 @@
         const bottom = Math.max(rect.top, rect.bottom - height);
         const candidates = [[rect.left, rect.top], [right, rect.top], [rect.left, bottom], [right, bottom]];
         const overlap = ([left, top]) => labels.reduce((total, other) => {
+          if (other.plane !== plane) return total;
           const shared = H.intersect({ left, top, right: left + width, bottom: top + height }, other);
           return total + (shared ? shared.width * shared.height : 0);
         }, 0);
@@ -316,18 +407,19 @@
         label.style.left = `${left - rect.left - 2}px`;
         label.style.top = `${top - rect.top}px`;
         label.style.maxWidth = `${Math.max(20, innerWidth - rect.left - 6)}px`;
-        labels.push({ left, top, right: left + width, bottom: top + height });
-        box.append(label); output.append(box);
+        labels.push({ left, top, right: left + width, bottom: top + height, plane });
+        box.append(label); plane.append(box);
       }
     }
     layer.replaceChildren(output);
-    drawDiscovery();
-    renderHover();
+    drawDiscovery(stack);
+    renderHover(stack);
   }
 
-  function drawDiscovery() {
+  function drawDiscovery(stack = popupStack()) {
     if (!discoveryLayer) return;
     const output = document.createDocumentFragment();
+    const planeFor = annotationPlanes(output, stack);
     if (discoveryActive && preferences.enabled) {
       let count = 0;
       for (const [node, items] of dataTargets) {
@@ -344,7 +436,7 @@
           outline.dataset.kind = kind;
           // Separate rings keep every active flag's color visible on one field.
           outline.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;outline-offset:${2 + index * 3}px`;
-          output.append(outline);
+          planeFor(node).append(outline);
         });
       }
     }
@@ -438,7 +530,7 @@
     }
   }
 
-  function renderHover() {
+  function renderHover(stack = popupStack()) {
     if (!hoverLayer) return;
     if (pinned && (!preferences.enabled || pinned.options !== inspectionOptions())) releasePinned(false);
     // Keep a pinned DOM intact: replacing it would erase the user's selection.
@@ -446,6 +538,7 @@
       const rect = visibleRect(pinned.node);
       pinned.outline.style.display = rect ? "block" : "none";
       if (rect) pinned.outline.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
+      maskAnnotations(pinned.plane, popupOwner(pinned.node, stack), stack);
       sizeHoverCard(pinned.card, true);
       const box = pinned.card.getBoundingClientRect();
       pinned.card.style.left = `${Math.max(12, Math.min(box.left, innerWidth - box.width - 12))}px`;
@@ -506,6 +599,11 @@
         add(row, "strong", "", `${binding.property} ← ${binding.model || "(por defecto)"}`);
         add(row, "code", "", binding.resolved || `${binding.path} [sin contexto]`);
         if (pinned && binding.resolved && binding.path !== binding.resolved) add(row, "code", "", `Ruta relativa: ${binding.path}`);
+        if (pinned) {
+          const button = add(row, "button", "hover-copy binding-values", "Ver modelo y valores"); button.type = "button";
+          button.setAttribute("aria-label", `Ver modelo y valores: ${binding.property} ← ${binding.model || "(por defecto)"}>${binding.path}`);
+          button.addEventListener("click", () => openValues(entry.roots[0], binding, button));
+        }
       }
       omitted += Math.max(0, entry.bindings.length - previewLimit);
     }
@@ -587,7 +685,9 @@
     const note = add(card, "div", "hover-note", pinned ? "Ctrl+C copia la selección · Ctrl+A selecciona el contenido de esta tarjeta" : "");
     const margin = 12;
     sizeHoverCard(card, Boolean(pinned));
-    hoverLayer.append(outline, card);
+    const plane = document.createElement("div"); plane.className = "annotation-plane";
+    maskAnnotations(plane, popupOwner(hovered.node, stack), stack); plane.append(outline);
+    hoverLayer.append(plane, card);
     if (!pinned) fitHoverPreview(content, note, omitted);
     const box = card.getBoundingClientRect();
     const anchor = !hovered.located && pointer ? pointer : { x: rect.left + Math.min(rect.width, 40), y: rect.top + Math.min(rect.height, 30) };
@@ -597,19 +697,134 @@
     card.style.left = `${Math.max(margin, Math.min(left, innerWidth - box.width - margin))}px`;
     card.style.top = `${Math.max(margin, Math.min(top, innerHeight - box.height - margin))}px`;
     if (pinned) {
-      pinned.card = card; pinned.outline = outline; pinned.content = content;
+      pinned.card = card; pinned.outline = outline; pinned.plane = plane; pinned.content = content;
       host.removeAttribute("aria-hidden");
       content.focus({ preventScroll: true });
     }
   }
-  async function copyCard(content) {
-    const text = content.innerText;
+  async function copyCard(content, text = content.innerText) {
     try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; } } catch { /* HTTP apps may require the local fallback. */ }
     const textarea = document.createElement("textarea"); textarea.value = text;
     textarea.style.cssText = "position:fixed;left:-10000px;top:0";
     content.append(textarea); textarea.select();
     try { if (!document.execCommand("copy")) throw new Error("Clipboard unavailable"); }
-    finally { textarea.remove(); pinned?.content?.focus({ preventScroll: true }); }
+    finally { textarea.remove(); (valuesDialog?.content || pinned?.content)?.focus({ preventScroll: true }); }
+  }
+  function closeValues(restoreFocus = true) {
+    if (!valuesDialog) return;
+    const previous = valuesDialog; valuesDialog = null;
+    previous.backdrop.remove();
+    if (pinned?.card) pinned.card.inert = false;
+    if (restoreFocus && previous.opener.isConnected) previous.opener.focus({ preventScroll: true });
+  }
+  function renderJSON(parent, text, focusPath = null) {
+    const formatted = H.jsonLines(text, focusPath);
+    let tools;
+    if (formatted.nodes.length) { tools = document.createElement("div"); tools.className = "json-tools"; parent.append(tools); }
+    const view = document.createElement("div"); view.className = "json-view"; parent.append(view);
+    const rows = [], folds = new Map();
+    let target = null;
+    formatted.lines.forEach((line, index) => {
+      const row = document.createElement("div"); row.className = "json-line"; row.dataset.line = index + 1;
+      const code = document.createElement("span"); code.className = "json-code"; row.append(code);
+      const tokens = /"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
+      let end = 0;
+      for (const match of line.matchAll(tokens)) {
+        code.append(document.createTextNode(line.slice(end, match.index)));
+        const token = document.createElement("span"), value = match[0];
+        const type = value.startsWith('"') ? (line.slice(match.index + value.length).trimStart().startsWith(":") ? "key" : "string") : value === "null" ? "null" : /^(true|false)$/.test(value) ? "boolean" : "number";
+        token.className = `json-${type}`; token.textContent = value; code.append(token);
+        end = match.index + value.length;
+      }
+      code.append(document.createTextNode(line.slice(end))); view.append(row); rows.push(row);
+      if (index + 1 === formatted.targetLine) {
+        target = row; row.classList.add("target"); row.tabIndex = -1;
+        row.setAttribute("aria-label", `Línea ${index + 1}, valor consultado`); row.setAttribute("aria-current", "true");
+      }
+    });
+    function updateFolds() {
+      let hiddenUntil = 0;
+      rows.forEach((row, index) => {
+        const line = index + 1, fold = folds.get(line);
+        row.hidden = line <= hiddenUntil;
+        if (fold) {
+          fold.button.setAttribute("aria-expanded", String(!fold.collapsed));
+          fold.button.setAttribute("aria-label", `${fold.collapsed ? "Expandir" : "Contraer"} ${fold.label}`);
+          fold.summary.hidden = !fold.collapsed;
+          if (!row.hidden && fold.collapsed) hiddenUntil = fold.endLine;
+        }
+      });
+    }
+    for (const node of formatted.nodes) {
+      const row = rows[node.startLine - 1], button = document.createElement("button");
+      button.type = "button"; button.className = "json-toggle";
+      const summary = document.createElement("span"); summary.className = "json-fold-summary";
+      summary.textContent = ` … ${node.size} ${node.array ? "elementos" : "propiedades"} ${formatted.lines[node.endLine - 1].trim()}`;
+      const fold = { ...node, collapsed: false, button, summary, label: `${JSON.stringify(node.path)} · línea ${node.startLine}` };
+      row.prepend(button); row.append(summary); folds.set(node.startLine, fold);
+      button.addEventListener("click", () => { fold.collapsed = !fold.collapsed; updateFolds(); });
+    }
+    if (tools) for (const [label, collapsed] of [["Contraer todo", true], ["Expandir todo", false]]) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "json-tool";
+      button.textContent = label; button.dataset.action = collapsed ? "collapse" : "expand"; tools.append(button);
+      button.addEventListener("click", () => { for (const fold of folds.values()) fold.collapsed = collapsed; updateFolds(); });
+    }
+    updateFolds();
+    return { target, revealTarget() {
+      if (!target) return;
+      const line = Number(target.dataset.line);
+      for (const fold of folds.values()) if (fold.startLine <= line && line <= fold.endLine) fold.collapsed = false;
+      updateFolds();
+    } };
+  }
+  function openValues(control, binding, opener) {
+    closeValues(false);
+    const result = safe(() => D.readBinding(control, binding), { status: "No se pudieron leer los datos en memoria." });
+    const add = (parent, tag, className, text) => {
+      const node = document.createElement(tag); node.className = className; node.textContent = text; parent.append(node); return node;
+    };
+    const backdrop = add(hoverLayer, "div", "values-backdrop", "");
+    const dialog = add(backdrop, "div", "values-dialog", "");
+    dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-labelledby", "lens-values-title");
+    const actions = add(dialog, "div", "hover-actions", "");
+    add(actions, "span", "", `Modelo ${binding.model || "(por defecto)"} · Esc para volver`);
+    const copy = add(actions, "button", "hover-copy", "Copiar valores"); copy.type = "button";
+    const locate = add(actions, "button", "values-locate", "Ir al valor"); locate.type = "button"; locate.disabled = true;
+    const close = add(actions, "button", "hover-close", "Cerrar"); close.type = "button";
+    close.setAttribute("aria-label", "Cerrar modelo y valores");
+    const content = add(dialog, "div", "values-content", ""); content.tabIndex = 0;
+    add(content, "h2", "", `Modelo ${binding.model || "(por defecto)"}`).id = "lens-values-title";
+    add(content, "div", "hover-id", result.type || binding.type);
+    add(content, "div", "hover-id", `${binding.property} ← ${result.path || binding.resolved || binding.path}`);
+    add(content, "div", "hover-note", result.status);
+    let target = null, json;
+    if (result.value !== undefined) {
+      add(content, "h3", "", "Valor del binding"); renderJSON(content, result.value);
+      add(content, "h3", "", result.scope);
+      const location = add(content, "div", "json-location", ""); location.setAttribute("role", "status");
+      json = renderJSON(content, result.data, result.focusPath); target = json.target;
+      location.textContent = target ? `Línea ${target.dataset.line} · Valor consultado resaltado` : "La ruta consultada no está representada en esta instantánea (sin contexto, no cargada o recortada).";
+      locate.disabled = !target;
+    }
+    valuesDialog = { backdrop, dialog, content, opener };
+    const copyText = [`Modelo ${binding.model || "(por defecto)"}`, result.type || binding.type,
+      `${binding.property} ← ${result.path || binding.resolved || binding.path}`, result.status,
+      ...(result.value !== undefined ? ["Valor del binding", result.value, result.scope, result.data] : [])].join("\n");
+    pinned.card.inert = true;
+    close.addEventListener("click", () => closeValues());
+    copy.addEventListener("click", async () => {
+      try { await copyCard(content, copyText); copy.textContent = "Copiado"; } catch { copy.textContent = "Selecciona y usa Ctrl+C"; }
+    });
+    for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "wheel"]) backdrop.addEventListener(type, (event) => event.stopPropagation());
+    const focusValue = () => {
+      if (!target?.isConnected) return;
+      json.revealTarget();
+      target.focus({ preventScroll: true });
+      const row = target.getBoundingClientRect(), viewport = content.getBoundingClientRect();
+      content.scrollTop += row.top - viewport.top - Math.max(0, (content.clientHeight - row.height) / 2);
+    };
+    locate.addEventListener("click", focusValue);
+    if (target) focusValue(); else content.focus({ preventScroll: true });
   }
   function pinHovered() {
     if (pinned || !preferences.enabled || !inspectionEnabled()) return Boolean(pinned);
@@ -621,6 +836,7 @@
     return Boolean(pinned?.card);
   }
   function releasePinned(restoreFocus = true) {
+    closeValues(false);
     const previous = pinned;
     pinned = null;
     host?.setAttribute("aria-hidden", "true");
@@ -656,11 +872,28 @@
     if (event.key === "Escape") {
       // Consume this key sequence only while closing an inspector card. In
       // particular, held-key repeats must not leak through to a UI5 dialog.
-      if (!handledEscape && !hoverLayer?.querySelector(".hover-card")) return;
+      if (!handledEscape && !hoverLayer?.querySelector(".hover-card") && !valuesDialog) return;
+      const repeated = handledEscape;
       handledEscape = true;
       event.preventDefault(); event.stopImmediatePropagation();
-      releaseCard();
+      if (!repeated) { if (valuesDialog) closeValues(); else releaseCard(); }
       return;
+    }
+    if (valuesDialog) {
+      event.stopPropagation();
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const stops = [...valuesDialog.dialog.querySelectorAll("button,[tabindex='0']")].filter((node) => !node.disabled && node.getClientRects().length);
+        const current = stops.indexOf(valuesDialog.dialog.getRootNode().activeElement);
+        const next = current < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (current + (event.shiftKey ? stops.length - 1 : 1)) % stops.length;
+        stops[next]?.focus({ preventScroll: true });
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        const range = document.createRange(); range.selectNodeContents(valuesDialog.content);
+        const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      }
+      if (event.key !== "Alt") return;
     }
     const inCard = pinned?.card && (event.composedPath().includes(pinned.card) || pinned.card.contains(pinned.card.getRootNode().activeElement));
     if (inCard) event.stopPropagation();
@@ -691,17 +924,15 @@
     preferences = H.options({ ...preferences, ...input });
     if (preferences.enabled && !wasEnabled) {
       ensureRuntime();
-      const started = performance.now();
-      runtimeTimer = setInterval(() => {
-        ensureRuntime();
-        if (hooksInstalled || performance.now() - started > 20000) clearInterval(runtimeTimer);
-      }, 25);
+      watchRuntime();
       observer = new MutationObserver((records) => {
         if (records.some((record) => record.target !== host && !host?.contains(record.target))) schedule();
       });
       if (document.documentElement) observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["style", "class", "hidden", "open"] });
       window.addEventListener("scroll", onLayout, true);
       window.addEventListener("resize", onLayout);
+      document.addEventListener("transitionend", onLayout, true);
+      document.addEventListener("animationend", onLayout, true);
       document.addEventListener("pointermove", onPointerMove, true);
       document.addEventListener("pointerout", onPointerOut, true);
       document.addEventListener("mousemove", onPointerMove, true);
@@ -714,10 +945,12 @@
       collect();
     }
     if (!preferences.enabled) {
-      observer?.disconnect(); clearInterval(timer); clearInterval(runtimeTimer); cancelAnimationFrame(frameRequest);
+      observer?.disconnect(); clearInterval(timer); cancelAnimationFrame(frameRequest);
       cancelAnimationFrame(hoverRequest); hoverRequest = null;
       frameRequest = null;
       window.removeEventListener("scroll", onLayout, true); window.removeEventListener("resize", onLayout);
+      document.removeEventListener("transitionend", onLayout, true);
+      document.removeEventListener("animationend", onLayout, true);
       document.removeEventListener("pointermove", onPointerMove, true);
       document.removeEventListener("pointerout", onPointerOut, true);
       document.removeEventListener("mousemove", onPointerMove, true);
@@ -729,6 +962,7 @@
       if (discoveryActive) requestHighlights(false);
       releasePinned(); handledAlt = false; handledEscape = false;
       pointer = null; dismissedNode = null; activeHoverNode = null;
+      entries = []; controls = []; dataTargets.clear();
       host?.remove(); host = null; layer = null; discoveryLayer = null; hoverLayer = null;
     } else schedule(true);
     return preferences;
@@ -773,5 +1007,7 @@
       }
     }
   });
+  document.addEventListener("load", onRuntimeScript, true);
+  watchRuntime();
   window.postMessage({ channel: "ui5-lens:ready" }, "*");
 })();

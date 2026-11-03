@@ -1,4 +1,4 @@
-/* Read runtime metadata only. Never request values, refresh a model or issue OData requests. */
+/* Automatic inspection reads metadata only. Values are read from memory on explicit binding clicks. */
 (() => {
   "use strict";
   if (window.__UI5_TECH_LENS_DATA__) return;
@@ -99,6 +99,104 @@
     return { models: [...models.values()], bindings };
   }
 
+  // Build bounded plain text without invoking getters or toJSON on business data.
+  function valueText(value) {
+    let remaining = 2000, characters = 80000;
+    const ancestors = new WeakSet();
+    function snapshot(item, depth) {
+      if (--remaining < 0 || characters <= 0) return "[Límite de tamaño]";
+      if (item === undefined) return "[No disponible en memoria]";
+      if (typeof item === "string") {
+        const result = item.slice(0, Math.min(10000, characters));
+        characters -= result.length;
+        return result.length < item.length ? `${result}… [Texto recortado]` : result;
+      }
+      if (item === null || typeof item === "boolean" || typeof item === "number") return item;
+      if (typeof item === "bigint") return String(item);
+      if (typeof item !== "object") return `[${typeof item}]`;
+      try { return Number.isFinite(Date.prototype.getTime.call(item)) ? Date.prototype.toISOString.call(item) : "[Fecha no válida]"; }
+      catch { /* Not a Date; traverse its data properties below. */ }
+      if (ancestors.has(item)) return "[Referencia circular]";
+      if (depth >= 10) return "[Límite de profundidad]";
+      ancestors.add(item);
+      const result = Array.isArray(item) ? [] : Object.create(null);
+      let count = 0;
+      for (const key in item) {
+        if (!Object.hasOwn(item, key)) continue;
+        if (remaining <= 0 || characters <= 0 || count++ >= 500) {
+          if (Array.isArray(result)) result.push("[Límite de tamaño]");
+          else result["…"] = "[Límite de tamaño]";
+          break;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(item, key);
+        const label = key.slice(0, Math.min(500, Math.max(0, characters)));
+        characters -= label.length;
+        const child = descriptor && Object.hasOwn(descriptor, "value") ? snapshot(descriptor.value, depth + 1) : "[Accessor no leído]";
+        if (Array.isArray(result)) result.push(child); else result[label] = child;
+      }
+      ancestors.delete(item);
+      return result;
+    }
+    return safe(() => JSON.stringify(snapshot(value, 0), null, 2), "[No se pudo representar el valor]");
+  }
+
+  function readBinding(control, descriptor) {
+    const unavailable = { status: "El binding ya no está disponible o ha cambiado. Cierra la tarjeta y vuelve a inspeccionar el elemento." };
+    if (!control || safe(() => control.isDestroyed(), control.bIsDestroyed || false)) return unavailable;
+    let match;
+    function find(info, binding, inheritedName) {
+      if (!info) return;
+      if (Array.isArray(info.parts)) {
+        const parts = safe(() => binding.getBindings(), []);
+        info.parts.forEach((part, index) => find(part, parts[index], info.model));
+      } else if (info.path === descriptor.path && alias(info.model ?? inheritedName) === descriptor.model) match = { info, binding };
+    }
+    if (descriptor.property === "contexto") {
+      const binding = safe(() => control.getObjectBinding(descriptor.model || undefined)) || safe(() => control.getElementBinding(descriptor.model || undefined));
+      if (binding) find({ path: safe(() => binding.getPath()), model: descriptor.model }, binding);
+    } else find(safe(() => control.getBindingInfo(descriptor.property)), safe(() => control.getBinding(descriptor.property)));
+    if (!match) return unavailable;
+    const binding = match.binding;
+    const model = safe(() => binding.getModel()) || safe(() => control.getModel(descriptor.model || undefined));
+    if (!model) return { status: "Modelo no disponible." };
+    const context = safe(() => binding.getContext()) || safe(() => control.getBindingContext(descriptor.model || undefined));
+    const path = safe(() => binding.getPath(), match.info.path);
+    const resolved = safe(() => model.resolve(path, context), path.startsWith("/") ? path : "");
+    if (resolved !== descriptor.resolved || typeOf(model) !== descriptor.type) return unavailable;
+    const isType = (name) => typeOf(model) === name || safe(() => model.isA(name), false);
+    const v4 = isType("sap.ui.model.odata.v4.ODataModel");
+    const json = isType("sap.ui.model.json.JSONModel");
+    const v2 = isType("sap.ui.model.odata.v2.ODataModel") || isType("sap.ui.model.odata.ODataModel");
+    const read = (fn) => { try { return fn(); } catch { return undefined; } };
+    const segments = (value) => value === "/" || value === "" ? [] : value.replace(/^\//, "").split("/");
+    let value, data, scope = "Valor del binding disponible en memoria";
+    let focusPath = resolved ? segments(resolved) : null;
+    if (v4) {
+      // V4 exposes cached data through contexts, not through Model.getProperty.
+      const bound = safe(() => binding.getBoundContext()) || context;
+      value = descriptor.property === "contexto" ? read(() => bound.getObject()) : read(() => binding.getValue());
+      if (value === undefined && resolved && context) value = read(() => context.getObject(path));
+      data = read(() => bound.getObject());
+      const base = safe(() => bound.getPath(), "");
+      focusPath = base && resolved === base ? [] : base && resolved.startsWith(`${base}/`) ? segments(resolved.slice(base.length + 1)) : null;
+      scope = `Contexto OData V4 en memoria${base ? ` · ${base}` : ""}`;
+      if (data === undefined && typeof binding?.getCurrentContexts === "function") {
+        data = read(() => binding.getCurrentContexts().slice(0, 100).map((item) => item?.getObject()));
+        scope = "Contextos OData V4 cargados (máximo 100)";
+        focusPath = resolved ? [] : null;
+      }
+    } else if (json || v2 || isType("sap.ui.model.xml.XMLModel") || isType("sap.ui.model.resource.ResourceModel")) {
+      if (resolved) value = read(() => model.getProperty(path, context));
+      if (json) { data = read(() => model.getData()); scope = "Datos del modelo JSON en memoria"; }
+      else if (v2) { data = read(() => model.getProperty("/")); scope = "Datos OData V2 en memoria (pueden estar incompletos)"; }
+      else { data = value; focusPath = resolved ? [] : null; }
+    } else {
+      return { status: "Este tipo de modelo no ofrece una lectura de valores en memoria compatible.", type: typeOf(model) };
+    }
+    return { type: typeOf(model), path: resolved || path, scope, value: valueText(value), data: valueText(data), focusPath: data === undefined ? null : focusPath,
+      status: "Instantánea local al abrir · Solo datos ya cargados · Los valores grandes se recortan" };
+  }
+
   function translatedTitle(component, value) {
     if (typeof value !== "string" || !value.trim()) return "";
     if (!/\{\{.+?\}\}/.test(value)) return value;
@@ -146,5 +244,5 @@
     }
     return result.sort((a, b) => b.score - a.score);
   }
-  Object.defineProperty(window, "__UI5_TECH_LENS_DATA__", { value: Object.freeze({ inspect, applications }), configurable: true });
+  Object.defineProperty(window, "__UI5_TECH_LENS_DATA__", { value: Object.freeze({ inspect, applications, readBinding }), configurable: true });
 })();

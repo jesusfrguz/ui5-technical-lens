@@ -29,9 +29,81 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     const tabs = await worker.evaluate(() => chrome.tabs.query({}));
     const tabId = tabs[0].id;
     const enabled = { enabled: true, views: true, fragments: true, compact: false };
-    await worker.evaluate(({ tabId, enabled }) => chrome.storage.session.set({ [`tab:${tabId}`]: enabled }), { tabId, enabled });
+    await worker.evaluate(({ tabId, enabled }) => chrome.storage.session.set({ [`tab:${tabId}`]: { ...enabled, enabled: false } }), { tabId, enabled });
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "Abrir diálogo" }).waitFor({ timeout: 45000 });
+    assert.equal(await page.locator("#ui5-technical-lens-overlay").count(), 0, "Passive capture leaves the overlay off");
+    await page.getByRole("button", { name: "Abrir diálogo" }).click();
+    await page.getByRole("dialog").waitFor();
+    const activationPopup = await context.newPage();
+    await activationPopup.addInitScript((id) => { chrome.tabs.query = async () => [await chrome.tabs.get(id)]; }, tabId);
+    await activationPopup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await activationPopup.waitForFunction(() => document.getElementById("app-id").textContent === "App: demo");
+    assert.equal(await activationPopup.locator("#enabled").isChecked(), false);
+    await activationPopup.locator("#enabled").check();
+    await page.waitForFunction(() => {
+      const shadow = window.__testLensShadow;
+      return [...(shadow?.querySelectorAll(".box.fragment .tag") || [])].some((node) => node.textContent.includes("OrderDialog.fragment.xml"));
+    });
+    assert.ok(await page.getByRole("dialog").isVisible(), "Enabling labels identifies an already-open fragment without reopening it");
+    await page.evaluate(() => {
+      window.__testPlaneAllows = (plane, x, y) => {
+        const clip = getComputedStyle(plane).clipPath;
+        if (clip === "none") return true;
+        if (!clip.startsWith('path("')) return false;
+        return document.createElement("canvas").getContext("2d").isPointInPath(new Path2D(clip.slice(6, -2)), x, y);
+      };
+    });
+    assert.ok(await page.evaluate(() => {
+      const shadow = window.__testLensShadow, dialog = document.querySelector('[data-sap-ui-popup][id$="--orderDialog"]');
+      const rect = dialog.getBoundingClientRect(), background = shadow.querySelector(".box.view").parentElement;
+      const foreground = [...shadow.querySelectorAll(".box.fragment")].find((box) => box.dataset.source.endsWith("OrderDialog.fragment.xml")).parentElement;
+      return !window.__testPlaneAllows(background, rect.left + rect.width / 2, rect.top + rect.height / 2) && window.__testPlaneAllows(background, 10, 10)
+        && window.__testPlaneAllows(foreground, rect.left + 20, rect.top + 20) && foreground.dataset.popupId === dialog.id;
+    }), "Popup clips background labels/outlines but retains its own label and the visible background");
+    await page.screenshot({ path: path.join(output, "fragment-open-before-activation.png") });
+    await activationPopup.locator("#models").check();
+    await page.waitForFunction(() => window.__UI5_TECH_LENS__.snapshot().options.models);
+    await page.bringToFront(); await page.keyboard.down("Control");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".discovery-outline"));
+    assert.ok(await page.evaluate(() => {
+      const shadow = window.__testLensShadow, rect = document.querySelector('[data-sap-ui-popup][id$="--orderDialog"]').getBoundingClientRect();
+      const outlines = [...shadow.querySelectorAll(".discovery-outline")];
+      const background = outlines.find((node) => node.parentElement.dataset.popupId === "")?.parentElement;
+      const foreground = outlines.find((node) => node.dataset.targetId.endsWith("--dialogCustomerField"))?.parentElement;
+      return background && foreground && !window.__testPlaneAllows(background, rect.left + 20, rect.top + 20) && window.__testPlaneAllows(foreground, rect.left + 20, rect.top + 20);
+    }), "Ctrl outlines respect the same popup stacking as file labels");
+    await page.keyboard.up("Control"); await activationPopup.locator("#models").uncheck();
+    await page.waitForFunction(() => !window.__UI5_TECH_LENS__.snapshot().options.models);
+    // A second, overlapping popup also masks annotations belonging to the lower one.
+    await page.evaluate(async () => {
+      const dialog = await sap.ui.require("sap/ui/core/Fragment").load({ name: "demo.fragment.OrderDialog", id: "stacked" });
+      window.__testStackedDialog = dialog;
+      dialog.setTitle("Popup superior").setContentWidth("320px").setContentHeight("120px");
+      await new Promise((resolve) => { dialog.attachAfterOpen(resolve); dialog.open(); });
+    });
+    await page.waitForFunction(() => {
+      const shadow = window.__testLensShadow, upper = document.getElementById("stacked--orderDialog").getBoundingClientRect();
+      const planes = [...shadow.querySelectorAll(".annotation-plane")], lower = planes.find((plane) => plane.dataset.popupId.endsWith("--orderDialog") && plane.dataset.popupId !== "stacked--orderDialog");
+      const top = planes.find((plane) => plane.dataset.popupId === "stacked--orderDialog");
+      return lower && top && !window.__testPlaneAllows(lower, upper.left + 20, upper.top + 20) && window.__testPlaneAllows(top, upper.left + 20, upper.top + 20);
+    });
+    await page.screenshot({ path: path.join(output, "stacked-popup-labels.png") });
+    await page.evaluate(() => { window.__testStackedDialog.getDomRef().style.transform = "translateX(90px)"; });
+    await page.waitForFunction(() => {
+      const rect = document.getElementById("stacked--orderDialog").getBoundingClientRect();
+      const background = window.__testLensShadow.querySelector(".box.view").parentElement;
+      return !window.__testPlaneAllows(background, rect.right - 5, rect.top + rect.height / 2);
+    });
+    await page.evaluate(() => new Promise((resolve) => {
+      window.__testStackedDialog.attachAfterClose(() => { window.__testStackedDialog.destroy(); delete window.__testStackedDialog; resolve(); });
+      window.__testStackedDialog.close();
+    }));
+    await page.waitForFunction(() => [...window.__testLensShadow.querySelectorAll(".annotation-plane")].some((plane) => plane.dataset.popupId.endsWith("--orderDialog") && getComputedStyle(plane).clipPath === "none"));
+    await activationPopup.close(); await page.bringToFront();
+    await page.getByRole("button", { name: "Cerrar", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    await page.waitForFunction(() => [...window.__testLensShadow.querySelectorAll(".box")].every((box) => getComputedStyle(box.parentElement).clipPath === "none"));
     await page.waitForFunction(() => window.__UI5_TECH_LENS__?.snapshot().entries.some((entry) => entry.path === "demo/fragment/Stats.fragment.xml"), null, { timeout: 30000 });
     const snapshot = () => page.evaluate(() => window.__UI5_TECH_LENS__.snapshot());
     let state = await snapshot();
@@ -53,6 +125,19 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.getByRole("button", { name: "Cerrar", exact: true }).click();
     await page.getByRole("dialog").waitFor({ state: "hidden" });
     assert.equal((await snapshot()).entries.find((entry) => entry.path.endsWith("OrderDialog.fragment.xml")).visible, false);
+    await page.evaluate(async () => {
+      const [Popover, Text] = await new Promise((resolve) => sap.ui.require(["sap/m/Popover", "sap/m/Text"], (...modules) => resolve(modules)));
+      const anchor = Object.values(sap.ui.require("sap/ui/core/Element").registry.all()).find((control) => control.getId().endsWith("--openDialog"));
+      window.__testPopover = new Popover("occlusion-popover", { title: "Popover", placement: "Bottom", contentWidth: "320px", content: [new Text({ text: "Las etiquetas de fondo deben quedar detrás" })] });
+      await new Promise((resolve) => { window.__testPopover.attachAfterOpen(resolve); window.__testPopover.openBy(anchor); });
+    });
+    await page.waitForFunction(() => {
+      const rect = document.getElementById("occlusion-popover").getBoundingClientRect(), plane = window.__testLensShadow.querySelector(".box.view").parentElement;
+      return !window.__testPlaneAllows(plane, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    });
+    await page.evaluate(() => new Promise((resolve) => {
+      window.__testPopover.attachAfterClose(() => { window.__testPopover.destroy(); delete window.__testPopover; resolve(); }); window.__testPopover.close();
+    }));
     await page.getByRole("button", { name: "Cargar una segunda vista" }).click();
     await page.waitForFunction(() => window.__UI5_TECH_LENS__.snapshot().entries.some((entry) => entry.path.endsWith("Details.view.xml")));
 
@@ -385,6 +470,55 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.waitForFunction(async () => (await window.__testClipboard.readText()).includes("Data source: ordersService"));
     await page.evaluate(() => { delete navigator.clipboard; });
     await page.screenshot({ path: path.join(output, "pinned-inspector.png") });
+    // Values are opt-in and stay local to this frame, outside extension snapshots.
+    const openBindingValues = async (modelName = "sales") => {
+      const point = await page.evaluate((name) => {
+        const button = [...window.__testLensShadow.querySelectorAll(".binding-values")].find((node) => node.getAttribute("aria-label").includes(`← ${name}>`));
+        if (!button) throw new Error(`Missing values button for ${name}`);
+        button.scrollIntoView({ block: "center" });
+        const box = button.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      }, modelName);
+      await page.mouse.click(point.x, point.y);
+      await page.waitForFunction(() => window.__testLensShadow.querySelector(".values-dialog"));
+    };
+    inspectionRequests = 0; page.on("request", countRequest);
+    await openBindingValues();
+    let valuesText = await page.evaluate(() => window.__testLensShadow.querySelector(".values-content").innerText);
+    assert.ok(valuesText.includes("Cliente demo") && valuesText.includes("Modelo sales") && valuesText.includes("OData V2"), valuesText);
+    assert.ok(await page.evaluate(() => {
+      const target = window.__testLensShadow.querySelector(".json-line.target");
+      return target?.textContent.includes('"CustomerName": "Cliente demo"') && window.__testLensShadow.activeElement === target;
+    }), "V2 highlights and focuses the exact bound property in the cached model");
+    await page.keyboard.press("Control+a");
+    assert.ok((await page.evaluate(() => getSelection().toString())).includes("Cliente demo"));
+    assert.ok(!(await page.evaluate(() => getSelection().toString())).includes("Pedidos recientes"));
+    await page.keyboard.press("Tab");
+    assert.ok(await page.evaluate(() => window.__testLensShadow.querySelector(".values-dialog").contains(window.__testLensShadow.activeElement)), "Tab stays inside values dialog");
+    const valuesCopy = await page.evaluate(() => {
+      const box = window.__testLensShadow.querySelector(".values-dialog .hover-copy").getBoundingClientRect();
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    });
+    await page.mouse.click(valuesCopy.x, valuesCopy.y);
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".values-dialog .hover-copy").textContent === "Copiado");
+    assert.ok((await page.evaluate(() => navigator.clipboard.readText())).includes("Cliente demo"));
+    await page.evaluate(() => getSelection().removeAllRanges());
+    await page.screenshot({ path: path.join(output, "binding-values-v2.png") });
+    await page.setViewportSize({ width: 460, height: 350 });
+    assert.ok(await page.evaluate(() => {
+      const dialog = window.__testLensShadow.querySelector(".values-dialog"), box = dialog.getBoundingClientRect();
+      const actions = dialog.querySelector(".hover-actions").getBoundingClientRect();
+      return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight && actions.bottom <= box.bottom && dialog.querySelector(".values-content").scrollHeight > dialog.querySelector(".values-content").clientHeight;
+    }), "Small viewport keeps actions visible and scrolls model data");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.keyboard.down("Escape"); await page.keyboard.down("Escape"); await page.keyboard.up("Escape");
+    assert.ok(await page.evaluate(() => !window.__testLensShadow.querySelector(".values-dialog") && window.__testLensShadow.querySelector(".hover-card.pinned")), "Esc and repeats close only values, preserving the card");
+    assert.ok(await page.evaluate(() => window.__testLensShadow.activeElement.classList.contains("binding-values")), "Close restores binding button focus");
+    await openBindingValues("ui");
+    assert.ok((await page.evaluate(() => window.__testLensShadow.querySelector(".values-content").innerText)).includes('"state": "Borrador"'));
+    await page.keyboard.press("Escape");
+    assert.ok(!JSON.stringify(await snapshot()).includes("Cliente demo"), "Value snapshots never enter the extension data bridge");
+    assert.equal(inspectionRequests, 0, "Opening model values doesn't request OData");
+    page.off("request", countRequest);
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => !window.__testLensShadow?.querySelector(".hover-card"));
     assert.equal(await page.evaluate(() => window.__UI5_TECH_LENS__.isPinned()), false, "Esc closes independently of Alt");
@@ -446,6 +580,122 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.locator('[id$="--noteField-inner"]').hover();
     await page.waitForFunction(() => !window.__testLensShadow?.querySelector(".hover-card"));
     await popup.locator("#models").check();
+    // Exercise default JSON and V4 through the same actual Alt + binding click flow.
+    for (const [field, modelName, expected] of [["noteField", "(por defecto)", "Entrega por la mañana"], ["productField", "catalog", "Equipo de oficina"]]) {
+      await page.bringToFront();
+      await page.locator(`[id$="--${field}-inner"]`).hover();
+      await page.waitForFunction((suffix) => window.__testLensShadow.querySelector(".hover-card")?.dataset.controlId.endsWith(suffix), `--${field}`);
+      await page.keyboard.press("Alt");
+      await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-card.pinned"));
+      inspectionRequests = 0; page.on("request", countRequest);
+      await openBindingValues(modelName);
+      valuesText = await page.evaluate(() => window.__testLensShadow.querySelector(".values-content").innerText);
+      assert.ok(valuesText.includes(expected), valuesText);
+      assert.ok(await page.evaluate((value) => {
+        const target = window.__testLensShadow.querySelector(".json-line.target");
+        return target?.textContent.includes(value) && window.__testLensShadow.activeElement === target;
+      }, expected), `${field} highlights the correct model/context property`);
+      assert.equal(inspectionRequests, 0, `${field} values use only loaded data`);
+      page.off("request", countRequest);
+      await page.screenshot({ path: path.join(output, `binding-values-${field}.png`) });
+      await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
+    }
+    // Repeated values far below the fold must select the binding path, not the first match.
+    await page.evaluate(() => {
+      const field = Object.values(sap.ui.require("sap/ui/core/Element").registry.all()).find((control) => control.getId().endsWith("--noteField"));
+      const JSONModel = sap.ui.require("sap/ui/model/json/JSONModel");
+      window.__testFocusModel = new JSONModel({ items: Array.from({ length: 350 }, (_, index) => ({ value: "Repetido", enabled: index % 2 === 0 })), html: '<img src="x" onerror="window.__unsafeJSON=true">' });
+      field.setModel(window.__testFocusModel, "focusTest"); field.bindProperty("value", "focusTest>/items/299/value");
+    });
+    await page.locator('[id$="--noteField-inner"]').hover();
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-card")?.textContent.includes("/items/299/value"));
+    await page.keyboard.press("Alt");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-card.pinned"));
+    await openBindingValues("focusTest");
+    const jsonFocusState = () => page.evaluate(() => {
+      const shadow = window.__testLensShadow, target = shadow.querySelector(".json-line.target"), content = shadow.querySelector(".values-content");
+      const row = target.getBoundingClientRect(), viewport = content.getBoundingClientRect();
+      return { line: target.dataset.line, text: target.textContent, focused: shadow.activeElement === target, visible: row.top >= viewport.top && row.bottom <= viewport.bottom,
+        scrolled: content.scrollTop > 0, highlighted: getComputedStyle(target).backgroundColor !== "rgba(0, 0, 0, 0)",
+        data: JSON.parse(shadow.querySelector(".json-view:last-child").innerText).items[299].value,
+        colors: ["key", "string", "boolean"].every((type) => shadow.querySelector(`.json-${type}`)), unsafe: Boolean(window.__unsafeJSON || shadow.querySelector(".values-dialog img")) };
+    });
+    let jsonState = await jsonFocusState();
+    assert.deepEqual(jsonState, { line: "1200", text: '      "value": "Repetido",', focused: true, visible: true, scrolled: true, highlighted: true, data: "Repetido", colors: true, unsafe: false });
+    await page.evaluate(() => { window.__testLensShadow.querySelector(".values-content").scrollTop = 0; });
+    const clickLocateValue = async () => {
+      const point = await page.evaluate(() => {
+        const box = window.__testLensShadow.querySelector(".values-locate").getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      });
+      await page.mouse.click(point.x, point.y);
+    };
+    await clickLocateValue();
+    jsonState = await jsonFocusState(); assert.ok(jsonState.focused && jsonState.visible && jsonState.scrolled, "Ir al valor returns to the target after manual scrolling");
+    await page.screenshot({ path: path.join(output, "binding-json-focused.png") });
+    // Native drags across tokens and lines select text; folding only uses the gutter button.
+    const dragJSON = async (multiline) => {
+      const points = await page.evaluate((multi) => {
+        const target = window.__testLensShadow.querySelector(".json-line.target");
+        const start = target.querySelector(multi ? ".json-key" : ".json-string").getBoundingClientRect();
+        const end = (multi ? target.nextElementSibling.querySelector(".json-boolean") : target.querySelector(".json-string")).getBoundingClientRect();
+        return { x1: start.left + 1, y1: start.top + start.height / 2, x2: end.right - 1, y2: end.top + end.height / 2 };
+      }, multiline);
+      await page.mouse.move(points.x1, points.y1); await page.mouse.down();
+      await page.mouse.move(points.x2, points.y2, { steps: 12 }); await page.mouse.up();
+      return page.evaluate(() => getSelection().toString());
+    };
+    assert.ok((await dragJSON(false)).includes("Repetido"), "Dragging over a colored string selects its text");
+    const dragged = await dragJSON(true);
+    assert.ok(dragged.includes("Repetido") && dragged.includes("enabled") && dragged.includes("false"), dragged);
+    await page.keyboard.press("Control+c");
+    assert.ok((await page.evaluate(() => navigator.clipboard.readText())).includes("enabled"), "Native Ctrl+C copies a multi-line drag selection");
+    assert.ok(await page.evaluate(() => window.__testLensShadow.querySelector('.json-view:last-child [data-line="1199"] .json-toggle').getAttribute("aria-expanded") === "true"), "Dragging text doesn't fold nodes");
+    await page.screenshot({ path: path.join(output, "binding-json-selection.png") });
+    await page.evaluate(() => getSelection().removeAllRanges());
+    const clickJSON = async (lineOrAction) => {
+      const point = await page.evaluate((key) => {
+        const view = window.__testLensShadow.querySelector(".json-view:last-child");
+        const button = typeof key === "number" ? view.querySelector(`[data-line="${key}"] .json-toggle`) : view.previousElementSibling.querySelector(`[data-action="${key}"]`);
+        button.scrollIntoView({ block: "center" }); const box = button.getBoundingClientRect();
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      }, lineOrAction);
+      await page.mouse.click(point.x, point.y);
+    };
+    await clickJSON(1199);
+    assert.ok(await page.evaluate(() => {
+      const view = window.__testLensShadow.querySelector(".json-view:last-child");
+      return view.querySelector('[data-line="1199"] .json-toggle').getAttribute("aria-expanded") === "false" && view.querySelector('[data-line="1200"]').hidden && !view.querySelector('[data-line="1203"]').hidden;
+    }), "Collapsing an object hides its children and closing brace, preserving siblings");
+    await page.keyboard.press("Enter");
+    assert.ok(await page.evaluate(() => !window.__testLensShadow.querySelector(".json-line.target").hidden), "Enter expands the focused node");
+    await clickJSON(1199); await clickJSON(2); await page.keyboard.press("Space");
+    assert.ok(await page.evaluate(() => window.__testLensShadow.querySelector(".json-line.target").hidden), "Expanding a parent preserves the child's collapsed state");
+    await clickJSON("collapse");
+    assert.equal(await page.evaluate(() => [...window.__testLensShadow.querySelectorAll(".json-view:last-child .json-line")].filter((row) => !row.hidden).length), 1, "Collapse all leaves a root summary");
+    const fullCopyPoint = await page.evaluate(() => {
+      const box = window.__testLensShadow.querySelector(".values-dialog .hover-copy").getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    });
+    await page.mouse.click(fullCopyPoint.x, fullCopyPoint.y);
+    await page.waitForFunction(async () => (await navigator.clipboard.readText()).startsWith("Modelo focusTest"));
+    const copiedModel = await page.evaluate(async () => {
+      const text = await navigator.clipboard.readText(), marker = "Datos del modelo JSON en memoria";
+      return JSON.parse(text.slice(text.indexOf(marker) + marker.length).trim());
+    });
+    assert.equal(copiedModel.items.length, 350, "Copy values includes the full snapshot even when nodes are collapsed");
+    await clickLocateValue();
+    assert.ok(await page.evaluate(() => {
+      const shadow = window.__testLensShadow, target = shadow.querySelector(".json-line.target");
+      const row = target.getBoundingClientRect(), content = shadow.querySelector(".values-content").getBoundingClientRect();
+      return !target.hidden && shadow.activeElement === target && row.top >= content.top && row.bottom <= content.bottom && shadow.querySelector('.json-view:last-child [data-line="3"] .json-toggle').getAttribute("aria-expanded") === "false";
+    }), "Ir al valor reopens its ancestors while leaving unrelated branches collapsed");
+    await page.screenshot({ path: path.join(output, "binding-json-folded.png") });
+    await clickJSON("expand"); await clickLocateValue();
+    assert.deepEqual(await jsonFocusState(), jsonState, "Expand all restores the JSON text and original line numbers");
+    await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      const field = Object.values(sap.ui.require("sap/ui/core/Element").registry.all()).find((control) => control.getId().endsWith("--noteField"));
+      field.bindProperty("value", "/note"); field.setModel(null, "focusTest"); window.__testFocusModel.destroy(); delete window.__testFocusModel;
+    });
     await page.locator("iframe").evaluate((node) => { node.style.width = "700px"; node.style.height = "400px"; });
     await page.bringToFront();
     await frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -472,6 +722,9 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await frame.waitForFunction(() => !window.__testLensShadow.querySelector(".discovery-outline"));
     await page.keyboard.press("Alt");
     await frame.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card.pinned"));
+    await frame.evaluate(() => window.__testLensShadow.querySelector(".binding-values").click());
+    assert.ok((await frame.evaluate(() => window.__testLensShadow.querySelector(".values-content").textContent)).includes("Cliente demo"), "Iframe values come from its own model");
+    await frame.evaluate(() => window.__testLensShadow.querySelector(".values-dialog .hover-close").click());
     await page.keyboard.press("Escape");
     await frame.waitForFunction(() => !window.__testLensShadow?.querySelector(".hover-card.pinned"));
     await popup.locator("#controllers").check();
