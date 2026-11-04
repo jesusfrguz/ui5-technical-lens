@@ -467,6 +467,9 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await page.mouse.click(copyBox.left + copyBox.width / 2, copyBox.top + copyBox.height / 2);
     await page.waitForFunction(() => window.__testPinnedCard.querySelector(".hover-copy").textContent === "Copiado");
     const allCopied = await page.evaluate(() => navigator.clipboard.readText());
+    const fieldId = (await customerField.getAttribute("id")).replace(/-inner$/, "");
+    assert.ok(allCopied.includes(`ID UI5: ${fieldId}`));
+    assert.ok(allCopied.includes(`ID DOM: ${fieldId}-inner`));
     assert.ok(allCopied.includes("sap.ui.model.odata.v2.ODataModel"));
     assert.ok(allCopied.includes("Data source: ordersService"));
     // HTTP intranet apps may not expose navigator.clipboard: verify that fallback.
@@ -787,6 +790,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await frame.waitForFunction(() => !window.__testLensShadow.querySelector(".discovery-outline"));
     await page.keyboard.press("Alt");
     await frame.waitForFunction(() => window.__testLensShadow?.querySelector(".hover-card.pinned"));
+    assert.ok((await frame.evaluate(() => window.__testLensShadow.querySelector(".hover-dom-id").textContent)).endsWith("--customerField-inner"), "Pinned identity comes from the inspected iframe");
     await frame.evaluate(() => window.__testLensShadow.querySelector(".binding-values").click());
     assert.ok((await frame.evaluate(() => window.__testLensShadow.querySelector(".values-content").textContent)).includes("Cliente demo"), "Iframe values come from its own model");
     await frame.evaluate(() => window.__testLensShadow.querySelector(".values-dialog .hover-close").click());
@@ -810,6 +814,57 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     assert.equal((await snapshot()).options.models, true);
     assert.equal((await snapshot()).options.odatas, true);
     assert.equal((await snapshot()).options.controllers, true);
+
+    // Alt identifies the actual UI5 control and inner DOM node even with every
+    // detail filter off. Identity inspection must not expose the field value.
+    await page.evaluate(() => {
+      window.__testIdentityOptions = window.__UI5_TECH_LENS__.snapshot().options;
+      window.__UI5_TECH_LENS__.setOptions({ views: false, fragments: false, models: false, odatas: false, controllers: false });
+    });
+    await page.locator('[id$="--customerField-inner"]').hover();
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".hover-card"));
+    await page.keyboard.press("Alt");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-card.pinned"));
+    const identityFieldId = (await page.locator('[id$="--customerField-inner"]').getAttribute("id")).replace(/-inner$/, "");
+    const identityText = await page.evaluate(() => window.__testLensShadow.querySelector(".hover-content").innerText);
+    assert.ok(identityText.includes(`ID UI5: ${identityFieldId}`));
+    assert.ok(identityText.includes(`ID DOM: ${identityFieldId}-inner`));
+    assert.ok(!identityText.includes("Cliente demo"));
+    await page.evaluate(() => window.__testLensShadow.querySelector(".hover-actions .hover-copy").click());
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-actions .hover-copy").textContent === "Copiado");
+    assert.ok((await page.evaluate(() => navigator.clipboard.readText())).includes(`ID UI5: ${identityFieldId}`));
+    await page.screenshot({ path: path.join(output, "element-ids-alt.png") });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".hover-card"));
+    // An unbound button still has an identity, including through its nested text.
+    await page.getByRole("button", { name: "Abrir diálogo" }).hover();
+    await page.keyboard.press("Alt");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-card.pinned")?.dataset.controlId.endsWith("--openDialog"));
+    assert.ok((await page.evaluate(() => window.__testLensShadow.querySelector(".hover-id").textContent)).endsWith("--openDialog"));
+    await page.keyboard.press("Alt");
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".hover-card"));
+    await page.evaluate(() => window.__UI5_TECH_LENS__.setOptions(window.__testIdentityOptions));
+
+    // Controller metadata may be attached to a parent view; the pinned identity
+    // and outline must still belong to the unbound child, not that view.
+    await page.evaluate(() => {
+      window.__UI5_TECH_LENS__.setOptions({ models: false, odatas: false, controllers: true });
+      const field = new (sap.ui.require("sap/m/Input"))("identity-unbound");
+      const view = Object.values(sap.ui.require("sap/ui/core/Element").registry.all()).find((control) => control.isA("sap.ui.core.mvc.View") && control.getViewName() === "demo.view.Main");
+      view.byId("customerField").getParent().insertItem(field, 0);
+      window.__testUnboundIdentity = field;
+    });
+    await page.locator("#identity-unbound-inner").hover();
+    await page.keyboard.press("Alt");
+    await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-card.pinned")?.dataset.controlId === "identity-unbound");
+    assert.equal(await page.evaluate(() => window.__testLensShadow.querySelector(".hover-id").textContent), "ID UI5: identity-unbound");
+    assert.ok((await page.evaluate(() => window.__testLensShadow.querySelector(".hover-content").innerText)).includes("demo/controller/Main.controller.js"));
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !window.__testLensShadow.querySelector(".hover-card"));
+    await page.evaluate(() => {
+      window.__testUnboundIdentity.destroy();
+      window.__UI5_TECH_LENS__.setOptions(window.__testIdentityOptions);
+    });
 
     // Re-injection must not add a second inspector or replace wrapped factories.
     const original = await page.evaluateHandle(() => sap.ui.require("sap/ui/core/Fragment").load);

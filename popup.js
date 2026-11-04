@@ -43,7 +43,7 @@ async function inspect() {
   $("app-component").textContent = app?.component && app.component !== app.id ? `Componente: ${app.component}` : "";
   $("reload").disabled = !frames.length;
   if (!frames.length) message("Abre una aplicación SAPUI5/OpenUI5 y actualiza la detección. Si todavía está cargando, espera unos segundos.");
-  else if (options.enabled) message(options.models || options.odatas || options.controllers ? "Señala un elemento y pulsa Alt para fijar su tarjeta y copiar. Alt o Esc la cierran por separado." : "Etiquetas activas · V: vistas · F: fragmentos.");
+  else if (options.enabled) message("Señala un elemento y pulsa Alt para ver sus IDs, fijar su tarjeta y copiar. Alt o Esc la cierran por separado.");
   else message("Superposición desactivada. Actívala para identificar los elementos.");
   render();
 }

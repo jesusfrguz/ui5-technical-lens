@@ -1,6 +1,6 @@
 {
   "name": "ui5-technical-lens",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "private": true,
   "description": "Chrome extension for SAPUI5 view and fragment overlays",
   "author": {

@@ -506,6 +506,18 @@
     return [...labels].map((label) => label.textContent.replace(/\s+/g, " ").trim()).filter(Boolean).join(" · ");
   }
 
+  function pointedElement() {
+    if (!pointer) return null;
+    const hit = document.elementFromPoint(pointer.x, pointer.y);
+    const byId = new Map(controls.map((control) => [controlId(control), control]));
+    for (let node = hit; node && node !== host; node = node.parentElement) {
+      if (node.tagName === "IFRAME") return null;
+      const control = byId.get(node.id) || byId.get(node.getAttribute("data-sap-ui"));
+      if (control) return { control, node, domId: hit.closest("[id]")?.id || "" };
+    }
+    return null;
+  }
+
   function sizeHoverCard(card, fixed) {
     card.style.width = `${Math.max(0, Math.min(fixed ? 560 : 460, innerWidth - 24))}px`;
     card.style.maxHeight = `${Math.max(0, Math.min(fixed ? 760 : 520, innerHeight - 24))}px`;
@@ -546,12 +558,12 @@
       return;
     }
     hoverLayer.replaceChildren(); activeHoverNode = null;
-    if (!preferences.enabled || !inspectionEnabled()) return;
+    if (!preferences.enabled || (!pinned && !inspectionEnabled())) return;
     const hovered = pinned || hoveredData();
     if (!hovered) return;
     const rect = visibleRect(hovered.node);
     if (!rect) return;
-    const items = hovered.items.filter((entry) => preferences[kindOption[entry.kind]]);
+    const items = hovered.items.filter((entry) => entry.kind === "element" || preferences[kindOption[entry.kind]]);
     if (!items.length) return;
     activeHoverNode = hovered.node;
     const entry = items.find((item) => item.kind === "model") || items[0];
@@ -563,7 +575,8 @@
     outline.className = `hover-outline${odata ? " odata" : controllerOnly ? " controller" : ""}`;
     outline.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
     card.className = `hover-card${odata ? " odata" : controllerOnly ? " controller" : ""}${pinned ? " pinned" : ""}`;
-    card.dataset.controlId = controlId(entry.roots[0]);
+    const inspectedControl = pinned?.control || entry.roots[0];
+    card.dataset.controlId = controlId(inspectedControl);
     const add = (parent, tag, className, text) => {
       const element = document.createElement(tag); element.className = className; element.textContent = text; parent.append(element); return element;
     };
@@ -584,10 +597,11 @@
       for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "wheel"]) card.addEventListener(type, (event) => event.stopPropagation());
     }
     const headings = [items.some((item) => item.kind === "model") ? "Modelos" : "", odata ? "OData" : "", controllerItems.length ? "Controladores" : ""].filter(Boolean);
-    add(content, "div", "hover-heading", headings.join(headings.length === 2 ? " y " : " · "));
-    const type = entry.controlType.split(".").pop(), label = controlLabel(entry.roots[0]);
-    add(content, "div", "hover-name", controllerOnly && !eventItems.length ? entry.scope.split("/").pop() : label ? `${label} · ${type}` : type);
-    add(content, "div", "hover-id", card.dataset.controlId);
+    add(content, "div", "hover-heading", headings.join(headings.length === 2 ? " y " : " · ") || "Elemento UI5");
+    const type = (safe(() => inspectedControl.getMetadata().getName()) || entry.controlType).split(".").pop(), label = controlLabel(inspectedControl);
+    add(content, "div", "hover-name", !pinned && controllerOnly && !eventItems.length ? entry.scope.split("/").pop() : label ? `${label} · ${type}` : type);
+    add(content, "div", "hover-id", pinned ? `ID UI5: ${card.dataset.controlId}` : card.dataset.controlId);
+    if (pinned?.domId) add(content, "div", "hover-id hover-dom-id", `ID DOM: ${pinned.domId}`);
     if (entry.scope) add(content, "div", "hover-scope", entry.scope);
     let omitted = 0;
     const previewLimit = 2;
@@ -827,11 +841,15 @@
     if (target) focusValue(); else content.focus({ preventScroll: true });
   }
   function pinHovered() {
-    if (pinned || !preferences.enabled || !inspectionEnabled()) return Boolean(pinned);
+    if (pinned || !preferences.enabled) return Boolean(pinned);
     dismissedNode = null; // An explicit Alt press may reopen a card closed by Esc.
-    const hovered = hoveredData();
+    if (performance.now() - lastScan > 650) collect();
+    let hovered = hoveredData();
+    const target = hovered?.located ? { control: hovered.items[0].roots[0], node: hovered.node, domId: hovered.node.id } : pointedElement();
+    if (target && !hovered) hovered = { node: target.node, items: [{ kind: "element", roots: [target.control],
+      controlType: safe(() => target.control.getMetadata().getName(), "Control"), scope: "", models: [], bindings: [] }] };
     if (!hovered || !visibleRect(hovered.node)) return false;
-    pinned = { ...hovered, options: inspectionOptions(), previousFocus: document.activeElement };
+    pinned = { ...hovered, hoverNode: hovered.node, ...target, options: inspectionOptions(), previousFocus: document.activeElement };
     renderHover();
     return Boolean(pinned?.card);
   }
@@ -853,10 +871,10 @@
   function onPointerMove(event) {
     if (event.isTrusted && Boolean(event.ctrlKey) !== discoveryActive) requestHighlights(Boolean(event.ctrlKey));
     if (pinned) return;
-    if (event.pointerType === "touch" || !inspectionEnabled()) return;
+    if (event.pointerType === "touch") return;
     pointer = { x: event.clientX, y: event.clientY };
     if (dismissedNode && !dismissedNode.contains(event.target)) dismissedNode = null;
-    queueHover();
+    if (inspectionEnabled()) queueHover();
   }
   function onPointerOut(event) {
     if (pinned) return;
@@ -903,7 +921,7 @@
     }
     const inCard = pinned?.card && (event.composedPath().includes(pinned.card) || pinned.card.contains(pinned.card.getRootNode().activeElement));
     if (inCard) event.stopPropagation();
-    if (event.key === "Alt" && !event.repeat && !event.ctrlKey && !event.metaKey && preferences.enabled && inspectionEnabled()) {
+    if (event.key === "Alt" && !event.repeat && !event.ctrlKey && !event.metaKey && preferences.enabled) {
       handledAlt = true; event.preventDefault();
       window.postMessage({ channel: "ui5-lens:hover-request", command: "toggle" }, "*");
     }
@@ -1009,7 +1027,7 @@
   }
   function releaseCard() {
     if (!pinned && !hoverLayer?.querySelector(".hover-card")) return;
-    dismissedNode = pinned?.node || activeHoverNode; releasePinned(); selected = ""; activeHoverNode = null; hoverLayer?.replaceChildren();
+    dismissedNode = pinned?.hoverNode || pinned?.node || activeHoverNode; releasePinned(); selected = ""; activeHoverNode = null; hoverLayer?.replaceChildren();
   }
   const api = Object.freeze({ snapshot, setOptions, focus, isPinned: () => Boolean(pinned), pin: pinHovered, release: releaseCard, highlightTargets });
   Object.defineProperty(window, "__UI5_TECH_LENS__", { value: api, configurable: true });
