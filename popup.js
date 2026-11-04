@@ -34,6 +34,12 @@ async function inspect() {
   $("app-title").textContent = (app?.titleResolved ? app.title : tabTitle || main?.result.title || app?.title) || "Aplicación actual";
   $("app-title").title = $("app-title").textContent;
   $("app-id").textContent = app?.id ? `App: ${app.id}` : "";
+  $("app-service").textContent = app ? `Servicio BSP/SICF: ${app.bsp?.name || "No disponible"}` : "";
+  $("app-service").title = app?.bsp ? `Origen: ${app.bsp.source}` : "No se ha encontrado una ruta de despliegue ABAP en los metadatos del componente.";
+  $("app-service-path").textContent = app?.bsp?.path || "";
+  $("app-service-path").title = $("app-service-path").textContent;
+  $("app-project").textContent = app?.project ? `Proyecto Web IDE: ${app.project}` : "";
+  $("app-project").title = app?.project ? "Nombre del proyecto de desarrollo; el servicio BSP/SICF no está confirmado." : "";
   $("app-component").textContent = app?.component && app.component !== app.id ? `Componente: ${app.component}` : "";
   $("reload").disabled = !frames.length;
   if (!frames.length) message("Abre una aplicación SAPUI5/OpenUI5 y actualiza la detección. Si todavía está cargando, espera unos segundos.");

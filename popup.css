@@ -6,6 +6,7 @@
 .data-filters>span{margin-left:auto;color:#85949f;font-size:10px}
 .app-card h2{white-space:normal;overflow-wrap:anywhere;line-height:1.35}
 .app-card p:empty{display:none}
+#app-service,#app-service-path,#app-project{white-space:normal;overflow-wrap:anywhere;user-select:text}
 .file-path,.binding-details{white-space:pre-line}
 .file details{margin-top:7px;font-size:10px;color:#4d7486}
 .file summary{cursor:pointer}

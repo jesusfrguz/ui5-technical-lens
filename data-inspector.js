@@ -217,6 +217,43 @@
     }
     return "";
   }
+  function bspService(value, source) {
+    if (typeof value !== "string" || !value) return null;
+    return safe(() => {
+      const url = new URL(value, location.href);
+      if (!/^https?:$/.test(url.protocol)) return null;
+      // Match the deployment path, not a query parameter or an OData service.
+      const match = url.pathname.match(/\/sap\/bc\/(?:ui5_ui5|bsp)\/([^/]+)\/([^/]+)/i);
+      if (!match) return null;
+      const namespace = decodeURIComponent(match[1]), app = decodeURIComponent(match[2]);
+      if (![namespace, app].every((part) => /^[a-z0-9_$-]+$/i.test(part))) return null;
+      return { name: (namespace.toLowerCase() === "sap" ? app : `/${namespace}/${app}`).toUpperCase(),
+        path: match[0], source };
+    });
+  }
+  function deployment(component, componentName, id, shell) {
+    const declared = safe(() => component.getManifestEntry("sap.platform.abap").uri);
+    const manifest = safe(() => component.getManifestObject());
+    const candidates = [
+      [declared, "sap.platform.abap/uri"],
+      [safe(() => manifest.resolveUri("./")), "URL del componente"],
+      [safe(() => sap.ui.require.toUrl(`${componentName.replace(/\./g, "/")}/Component.js`)), "Cargador UI5"]
+    ];
+    for (const [value, source] of candidates) {
+      const bsp = bspService(value, source);
+      if (bsp) return { bsp, project: "" };
+    }
+    // A Web IDE project name does not prove the BSP deployment name.
+    const project = !shell && safe(() => {
+      const url = new URL(location.href);
+      const target = url.searchParams.get("sap-ushell-test-url-additionalInformation");
+      if (target !== `SAPUI5.Component=${componentName}` && target !== `SAPUI5.Component=${id}`) return "";
+      const path = url.searchParams.get("hc_orionpath") || "";
+      const match = path.match(/^\/[^/]+\/([^/]+)(?:\/|$)/);
+      return match ? match[1] : "";
+    }, "");
+    return { bsp: null, project: project || "" };
+  }
   function applications(controls, isVisible) {
     const Component = moduleValue("sap/ui/core/Component") || window.sap?.ui?.core?.Component;
     const registry = Component?.registry || moduleValue("sap/ui/core/ComponentRegistry");
@@ -240,6 +277,7 @@
       const title = translatedTitle(component, app.title);
       const shell = /^sap\.(ushell|ui|m)(\.|$)/.test(id);
       result.push({ id, title: title || id, component: componentName, titleResolved: Boolean(title),
+        ...deployment(component, componentName, id, shell),
         score: (visible ? 100 : 0) + (app.type === "application" ? 30 : 0) + (title ? 10 : 0) - (shell ? 200 : 0) });
     }
     return result.sort((a, b) => b.score - a.score);

@@ -16,6 +16,13 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const extensionId = new URL(worker.url()).host;
     const page = context.pages()[0] || await context.newPage();
+    // Simulate deployment metadata without changing the demo's local paths.
+    await context.route("**/manifest.json*", async (route) => {
+      const response = await route.fetch();
+      const manifest = await response.json();
+      if (manifest["sap.app"]?.id === "demo") manifest["sap.platform.abap"] = { uri: "/sap/bc/ui5_ui5/sap/zlens_demo/" };
+      await route.fulfill({ response, json: manifest });
+    });
     await page.addInitScript(() => {
       const original = Element.prototype.attachShadow;
       Element.prototype.attachShadow = function (options) {
@@ -161,6 +168,8 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
     await popup.waitForFunction(() => document.getElementById("app-id").textContent === "App: demo");
     assert.equal(await popup.locator("#app-title").textContent(), "Pedidos · Demo Technical Lens", "Translated app title on popup open");
+    assert.equal(await popup.locator("#app-service").textContent(), "Servicio BSP/SICF: ZLENS_DEMO");
+    assert.equal(await popup.locator("#app-service-path").textContent(), "/sap/bc/ui5_ui5/sap/zlens_demo");
     await popup.getByText("demo/fragment/Summary.fragment.xml", { exact: true }).first().waitFor();
     assert.ok((await popup.locator("#runtime").textContent()).includes("2 marcos"));
     await popup.screenshot({ path: path.join(output, "popup.png"), fullPage: true });
