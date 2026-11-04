@@ -5,7 +5,7 @@
   "description": "Chrome extension for SAPUI5 view and fragment overlays",
   "author": {
     "name": "Jesús Franco Guzmán",
-    "url": "https://es.linkedin.com/in/jesus-franco-guzman"
+    "url": "https://www.linkedin.com/in/jesus-franco-guzman"
   },
   "scripts": {
     "test": "node --test tests/*.test.cjs",

@@ -2,7 +2,7 @@
 
 Extensión de Chrome (Manifest V3) que muestra los ficheros técnicos de las vistas y fragmentos SAPUI5/OpenUI5 sobre los elementos de la aplicación actual.
 
-Creada por **Jesús Franco Guzmán** · [LinkedIn](https://es.linkedin.com/in/jesus-franco-guzman).
+Creada por **Jesús Franco Guzmán** · [LinkedIn](https://www.linkedin.com/in/jesus-franco-guzman).
 
 [Descargar la última versión lista para instalar](https://github.com/jesusfrguz/ui5-technical-lens/releases/latest/download/UI5-Technical-Lens.zip) · [Versiones y notas de publicación](https://github.com/jesusfrguz/ui5-technical-lens/releases).
 
@@ -151,4 +151,4 @@ Referencias de mantenimiento: [creación de fragmentos en SAPUI5](https://github
 
 **Jesús Franco Guzmán**
 
-Perfil profesional y contacto: [Jesús Franco Guzmán en LinkedIn](https://es.linkedin.com/in/jesus-franco-guzman).
+Perfil profesional y contacto: [Jesús Franco Guzmán en LinkedIn](https://www.linkedin.com/in/jesus-franco-guzman).
