@@ -70,7 +70,7 @@ test("DevTools opens only the matched resource with explicit zero-based line and
   const context = { __UI5_TECH_LENS_SOURCES__: require("../source-locator.js"), setTimeout, clearTimeout,
     chrome: { runtime: { id: "test-extension", connect: () => ({ postMessage: (message) => { reply = message; }, onDisconnect: { addListener: () => {} }, onMessage: { addListener: (callback) => { listener = callback; } } }) },
     devtools: { inspectedWindow: { tabId: 7, getResources: (callback) => callback([{ url: "https://example.com/Main.js", getContent: (callback) => callback("// heading\nconst fn = function run() {};", "") }]) },
-      panels: { openResource: (url, line, column, callback) => { opened = { url, line, column }; callback(); } } } } };
+      panels: { create: (title, icon, page, callback) => { assert.equal(title, "UI5 Code"); assert.equal(page, "code-panel.html"); callback({ onShown: { addListener() {} } }); }, openResource: (url, line, column, callback) => { opened = { url, line, column }; callback(); } } } } };
   vm.runInNewContext(fs.readFileSync(require("node:path").join(__dirname, "../devtools.js"), "utf8"), context);
   assert.equal(reply.tabId, 7);
   await listener({ action: "openHandler", token: "');alert(1)//" }); assert.equal(opened, undefined);
@@ -85,7 +85,7 @@ test("DevTools opens only the matched resource with explicit zero-based line and
 test("DevTools stops reconnecting when its extension context is invalidated", () => {
   let valid = true, disconnect, scheduled = 0, connections = 0;
   const context = { setTimeout: () => { scheduled++; }, chrome: { runtime: { get id() { if (!valid) throw new Error("Extension context invalidated."); return "test-extension"; },
-    connect: () => { connections++; return { postMessage() {}, onDisconnect: { addListener: (callback) => { disconnect = callback; } }, onMessage: { addListener() {} } }; } }, devtools: { inspectedWindow: { tabId: 1 } } } };
+    connect: () => { connections++; return { postMessage() {}, onDisconnect: { addListener: (callback) => { disconnect = callback; } }, onMessage: { addListener() {} } }; } }, devtools: { panels: { create() {} }, inspectedWindow: { tabId: 1 } } } };
   const script = fs.readFileSync(path.join(__dirname, "../devtools.js"), "utf8");
   vm.runInNewContext(script, context); assert.equal(connections, 1);
   valid = false; assert.doesNotThrow(() => disconnect()); assert.equal(scheduled, 0);

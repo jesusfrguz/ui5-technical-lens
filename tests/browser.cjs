@@ -11,11 +11,18 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${server.address().port}`;
     context = await chromium.launchPersistentContext(profile, { channel: process.env.UI5_TEST_BROWSER || "chromium", headless: true,
-      args: [`--disable-extensions-except=${extensionRoot}`, `--load-extension=${extensionRoot}`], viewport: { width: 1280, height: 900 } });
+      executablePath: process.env.UI5_TEST_EXECUTABLE_PATH || undefined,
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: ["--enable-unsafe-extension-debugging", ...(process.env.UI5_TEST_BROWSER === "chrome" ? [] : [`--disable-extensions-except=${extensionRoot}`, `--load-extension=${extensionRoot}`])], viewport: { width: 1280, height: 900 } });
+    if (process.env.UI5_TEST_BROWSER === "chrome") {
+      const browserSession = await context.browser().newBrowserCDPSession();
+      await browserSession.send("Extensions.loadUnpacked", { path: extensionRoot });
+    }
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: url });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const extensionId = new URL(worker.url()).host;
-    const page = context.pages()[0] || await context.newPage();
+    const page = await context.newPage();
+    for (const other of context.pages().filter((other) => other !== page)) await other.close();
     // Simulate deployment metadata without changing the demo's local paths.
     await context.route("**/manifest.json*", async (route) => {
       const response = await route.fetch();
@@ -255,7 +262,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     await devtoolsPage.addInitScript((id) => {
       chrome.devtools = { inspectedWindow: { tabId: id,
         getResources: (callback) => window.__testResources().then((urls) => callback(urls.map((url) => ({ url, getContent: (callback) => window.__testResourceContent(url).then((source) => callback(source, "")) })))) },
-        panels: { openResource: (url, line, column, callback) => window.__testOpenResource({ url, line, column }).then(() => callback()) } };
+        panels: { create: (_title, _icon, _page, callback) => callback({ onShown: { addListener() {} } }), openResource: (url, line, column, callback) => window.__testOpenResource({ url, line, column }).then(() => callback()) } };
     }, tabId);
     await devtoolsPage.goto(`chrome-extension://${extensionId}/devtools.html`);
     await page.waitForFunction(() => window.__testLensShadow.querySelector(".hover-source-status")?.textContent.includes("Ubicación enviada"));
@@ -821,6 +828,8 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
       window.__testIdentityOptions = window.__UI5_TECH_LENS__.snapshot().options;
       window.__UI5_TECH_LENS__.setOptions({ views: false, fragments: false, models: false, odatas: false, controllers: false });
     });
+    await page.bringToFront();
+    await page.mouse.move(5, 5);
     await page.locator('[id$="--customerField-inner"]').hover();
     await page.waitForFunction(() => !window.__testLensShadow.querySelector(".hover-card"));
     await page.keyboard.press("Alt");

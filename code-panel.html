@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>UI5 Code</title><link rel="stylesheet" href="code-panel.css"></head>
+<body>
+  <header>
+    <button id="back" title="Volver (Alt+←)" disabled>← Volver</button>
+    <button id="find-open" title="Buscar en el código (Ctrl+F)">Buscar</button>
+    <button id="refresh">Actualizar</button><button id="last" disabled>Última función</button><button id="sources" disabled>Abrir en Sources</button>
+    <details id="help"><summary>Atajos</summary><p id="hint">Ctrl+clic en una función, método, variable, constante o ruta de importación para ir a su definición. También Ctrl+Enter sobre el nombre o la ruta con foco. Ctrl+F para buscar y Esc para cerrar la búsqueda. Alt+← para volver.</p></details>
+  </header>
+  <div id="workspace">
+    <aside id="sidebar" aria-label="Explorador de archivos">
+      <h2>Archivos</h2>
+      <input id="filter" type="search" aria-label="Filtrar archivos" placeholder="Filtrar archivos…">
+      <nav id="files" aria-label="Árbol de archivos JavaScript"></nav>
+    </aside>
+    <section id="editor" aria-label="Visor de código">
+      <div id="filename">Selecciona un archivo</div>
+      <div id="findbar" role="search" aria-label="Buscar en el código" hidden>
+        <textarea id="find" rows="1" aria-label="Buscar texto en el código" placeholder="Buscar en el código…" spellcheck="false"></textarea>
+        <button id="find-prev" title="Anterior (Mayús+Enter / Mayús+F3)" aria-label="Resultado anterior" disabled>↑</button>
+        <button id="find-next" title="Siguiente (Enter / F3)" aria-label="Resultado siguiente" disabled>↓</button>
+        <span id="find-count" role="status" aria-live="polite">Buscar en el código</span>
+        <label><input id="find-all" type="checkbox"> Todos los archivos</label>
+        <label title="Distinguir mayúsculas y minúsculas"><input id="find-case" type="checkbox"> Aa</label>
+        <button id="find-close" title="Cerrar búsqueda (Esc)" aria-label="Cerrar búsqueda">×</button>
+      </div>
+      <section id="search-results" aria-label="Resultados de búsqueda en todos los archivos" hidden>
+        <h2 id="search-results-title">Resultados</h2>
+        <ul id="search-result-list"></ul>
+        <button id="search-more" hidden>Mostrar más resultados</button>
+      </section>
+      <div id="candidates" aria-label="Definiciones candidatas" hidden></div>
+      <main id="viewport" tabindex="0" aria-label="Código JavaScript"><pre id="code"></pre></main>
+      <footer id="statusbar">
+        <div id="status" role="status" aria-live="polite">Selecciona un archivo.</div>
+        <div id="load-status" role="status" aria-live="polite"></div>
+      </footer>
+    </section>
+  </div>
+  <script src="vendor/acorn.js"></script><script src="code-navigation.js"></script><script src="code-panel.js"></script>
+</body></html>

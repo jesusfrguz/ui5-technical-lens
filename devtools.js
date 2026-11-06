@@ -3,16 +3,26 @@
 const SOURCES = globalThis.__UI5_TECH_LENS_SOURCES__;
 const validToken = (value) => typeof value === "string" && /^h[a-f0-9]{32}_\d+$/.test(value);
 let generation = 0;
+let codeWindow, lastCodeLocation;
+if (available()) chrome.devtools.panels.create("UI5 Code", "", "code-panel.html", (panel) => {
+  panel.onShown.addListener((window) => {
+    codeWindow = window;
+    if (lastCodeLocation) { window.openLocation(lastCodeLocation); lastCodeLocation = null; }
+    window.focusPanel?.();
+  });
+});
 function available() {
   try { return Boolean(chrome.runtime?.id); } catch { return false; }
 }
+chrome.devtools.network?.onNavigated.addListener(() => { generation++; lastCodeLocation = null; });
 const timed = (operation) => new Promise((resolve, reject) => {
   const timeout = setTimeout(() => reject(new Error("DevTools no respondió. Vuelve a abrirlo e inténtalo otra vez.")), 10000);
   operation((value) => { clearTimeout(timeout); resolve(value); }, (error) => { clearTimeout(timeout); reject(error); });
 });
 async function locate(value) {
   const resources = await timed((resolve) => chrome.devtools.inspectedWindow.getResources(resolve));
-  const candidates = resources.filter((resource) => /\.(?:[cm]?js)(?:[?#]|$)/i.test(resource.url) || SOURCES.sameResource(resource.url, value.url));
+  const candidates = resources.filter((resource) => !/^\s*(?:(?:blob|filesystem):)*chrome-extension:/i.test(resource.url) &&
+    (/\.(?:[cm]?js)(?:[?#]|$)/i.test(resource.url) || SOURCES.sameResource(resource.url, value.url)));
   const read = async (items) => Promise.all(items.map((resource) => timed((resolve) => resource.getContent((content, encoding) => resolve({ url: resource.url, content: encoding ? "" : content }))).catch(() => ({ url: resource.url, content: "" }))));
   const preferred = candidates.filter((resource) => SOURCES.sameResource(resource.url, value.url));
   const known = preferred.length ? SOURCES.locate(await read(preferred), value) : null;
@@ -35,6 +45,8 @@ function connect() {
       const location = await locate(value);
       if (request !== generation) return;
       if (location.error) throw new Error(location.error);
+      lastCodeLocation = location;
+      if (codeWindow?.openLocation) { codeWindow.openLocation(location); lastCodeLocation = null; }
       await timed((resolve, reject) => chrome.devtools.panels.openResource(location.url, location.line, location.column, (result) => {
         try {
           const error = chrome.runtime.lastError;
