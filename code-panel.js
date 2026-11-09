@@ -407,8 +407,11 @@ async function navigate(offset) {
     return unique.length ? { locations: unique } : { error: `No se puede resolver «${token?.method || "evento"}» en el controlador asociado con el código cargado.` };
   };
   let result = resolve();
-  if (result.error && chrome.devtools.inspectedWindow.eval) {
-    const names = xml ? controllers.map((name) => name.startsWith("module:") ? name.slice(7).replace(/\.js$/, "") : name.replace(/\./g, "/") + ".controller").filter((name) => !Object.hasOwn(moduleUrls, name)) : navigation.moduleNames(url);
+  const attemptedModules = new Set();
+  while (result.error && chrome.devtools.inspectedWindow.eval) {
+    const names = navigation.pendingModuleNames().filter((name) => !attemptedModules.has(name));
+    if (!names.length) break;
+    names.forEach((name) => attemptedModules.add(name));
     if (names.length) {
       status("Consultando las rutas del cargador UI5…");
       // Only resolve URLs with UI5's loader. Never load a module or invoke an

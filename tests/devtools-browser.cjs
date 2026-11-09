@@ -1,6 +1,6 @@
 "use strict";
 // Exercise the real DevTools extension API and inspect the native Sources editor.
-const { chromium } = require("playwright"), assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path"), http = require("node:http");
+const { launchExtension } = require("./browser-context.cjs"), assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path"), http = require("node:http");
 const root = path.resolve(__dirname, ".."), output = path.join(root, "test-results");
 fs.mkdirSync(output, { recursive: true });
 const sources = {
@@ -43,15 +43,7 @@ const server = http.createServer((request, response) => {
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${server.address().port}`;
-    context = await chromium.launchPersistentContext(profile, { channel: process.env.UI5_TEST_BROWSER || "chromium", headless: true,
-      executablePath: process.env.UI5_TEST_EXECUTABLE_PATH || undefined,
-      ignoreDefaultArgs: ["--disable-extensions"],
-      args: ["--enable-unsafe-extension-debugging", "--auto-open-devtools-for-tabs", ...(["chrome", "msedge"].includes(process.env.UI5_TEST_BROWSER) ? [] : [`--disable-extensions-except=${root}`, `--load-extension=${root}`])] });
-    if (["chrome", "msedge"].includes(process.env.UI5_TEST_BROWSER)) {
-      const browserSession = await context.browser().newBrowserCDPSession();
-      await browserSession.send("Extensions.loadUnpacked", { path: root });
-      if (!context.serviceWorkers().length) await context.waitForEvent("serviceworker");
-    }
+    context = await launchExtension(profile, { args: ["--auto-open-devtools-for-tabs"] });
     const page = await context.newPage();
     for (const other of context.pages().filter((other) => other !== page)) await other.close();
     await page.goto(url);
@@ -135,7 +127,7 @@ const server = http.createServer((request, response) => {
       const panelTarget = (await cdp.send("Target.getTargets")).targetInfos.find((t) => t.url.endsWith("/code-panel.html"));
       if (panelTarget) {
         if (!panelSession) panelSession = (await cdp.send("Target.attachToTarget", { targetId: panelTarget.targetId, flatten: false })).sessionId;
-        const r = await native("Runtime.evaluate", { expression: 'typeof window.openLocation === "function" && document.querySelectorAll(".line").length > 0', returnByValue: true }, panelSession);
+        const r = await native("Runtime.evaluate", { expression: 'typeof window.openLocation === "function" && document.querySelectorAll(".line").length > 0 && Boolean(document.querySelector(".file[aria-current=page]")) && document.getElementById("load-status").textContent.includes("archivos disponibles")', returnByValue: true }, panelSession);
         if (r.result.value) { panelContext = true; break; }
       }
       await new Promise((resolve) => setTimeout(resolve, 100));

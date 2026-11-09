@@ -1,14 +1,12 @@
 "use strict";
-const { chromium } = require("playwright"), assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path"), http = require("node:http");
+const { launchExtension } = require("./browser-context.cjs"), assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path"), http = require("node:http");
 const root = path.resolve(__dirname, ".."), profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-reload-test-"));
-const extensionRoot = path.resolve(process.env.UI5_TEST_EXTENSION_DIR || root);
 const server = http.createServer((request, response) => { response.setHeader("Content-Type", "text/html"); response.end("<!doctype html><h1>Extension reload regression</h1>"); });
 (async () => {
   let context;
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    context = await chromium.launchPersistentContext(profile, { channel: process.env.UI5_TEST_BROWSER || "chromium", headless: true,
-      args: [`--disable-extensions-except=${extensionRoot}`, `--load-extension=${extensionRoot}`] });
+    context = await launchExtension(profile);
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().version), require("../manifest.json").version, "Testing the current packaged version");
     const page = context.pages()[0], exceptions = [], invalidationLogs = [];

@@ -130,6 +130,7 @@
   }
   function create(resources, { moduleUrls = {} } = {}) {
     const docs = resources.map((r) => ({ url: r.url, content: r.content }));
+    const pendingModules = new Set();
     const ensure = (doc) => { if (!doc.parsed) { Object.assign(doc, index(doc.url, doc.content)); doc.parsed = true; } return doc; };
     function binding(doc, node) {
       let scope = doc.meta.get(node)?.scope;
@@ -137,6 +138,9 @@
       return null;
     }
     function imported(doc, ref) {
+      // Record imports reached through base controllers and provider aliases as
+      // well as imports in the source file. The panel can map these and retry.
+      if (ref.ui5 && !ref.module.startsWith(".") && !Object.hasOwn(moduleUrls, ref.module)) pendingModules.add(ref.module);
       let expected;
       try { expected = new URL(ref.module, doc.url); } catch { return []; }
       const clean = (s) => s.replace(/-dbg(?=\.js$)/, "").replace(/\.js$/, "");
@@ -280,7 +284,7 @@
         return [`${location.url}:${location.offset}`, location];
       })).values()];
     }
-    return { resolve, moduleOffsets, moduleNames, controllerMethod, documents: docs };
+    return { resolve, moduleOffsets, moduleNames, pendingModuleNames: () => [...pendingModules], controllerMethod, documents: docs };
   }
   const api = { create };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

@@ -1,8 +1,7 @@
 "use strict";
 const assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path");
-const { chromium } = require("playwright"), server = require("../tools/serve.cjs");
+const { launchExtension } = require("./browser-context.cjs"), server = require("../tools/serve.cjs");
 const root = path.resolve(__dirname, "..");
-const extensionRoot = path.resolve(process.env.UI5_TEST_EXTENSION_DIR || root);
 const output = path.join(root, "test-results"); fs.mkdirSync(output, { recursive: true });
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
 (async () => {
@@ -10,14 +9,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${server.address().port}`;
-    context = await chromium.launchPersistentContext(profile, { channel: process.env.UI5_TEST_BROWSER || "chromium", headless: true,
-      executablePath: process.env.UI5_TEST_EXECUTABLE_PATH || undefined,
-      ignoreDefaultArgs: ["--disable-extensions"],
-      args: ["--enable-unsafe-extension-debugging", ...(process.env.UI5_TEST_BROWSER === "chrome" ? [] : [`--disable-extensions-except=${extensionRoot}`, `--load-extension=${extensionRoot}`])], viewport: { width: 1280, height: 900 } });
-    if (process.env.UI5_TEST_BROWSER === "chrome") {
-      const browserSession = await context.browser().newBrowserCDPSession();
-      await browserSession.send("Extensions.loadUnpacked", { path: extensionRoot });
-    }
+    context = await launchExtension(profile, { viewport: { width: 1280, height: 900 } });
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: url });
     const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
     const extensionId = new URL(worker.url()).host;
@@ -444,6 +436,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     assert.equal(inspectionRequests, 0, "Inspection doesn't fetch OData");
     page.off("request", countRequest);
     await popup.locator("#search").fill("customerField");
+    await popup.locator(".file .odata").first().waitFor();
     assert.ok(await popup.locator(".file .odata").count() > 0);
     assert.ok((await popup.locator(".file-name").allTextContents()).every((name) => name.toLowerCase().includes("customerfield")));
     await popup.locator("#search").fill("");
@@ -845,11 +838,14 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
 
     // Alt identifies the actual UI5 control and inner DOM node even with every
     // detail filter off. Identity inspection must not expose the field value.
+    await page.waitForFunction(dataLoaded);
     await page.evaluate(() => {
       window.__testIdentityOptions = window.__UI5_TECH_LENS__.snapshot().options;
       window.__UI5_TECH_LENS__.setOptions({ views: false, fragments: false, models: false, odatas: false, controllers: false });
     });
     await page.bringToFront();
+    await page.locator('[id$="--customerField-inner"]').focus();
+    await page.waitForFunction(() => document.hasFocus());
     await page.mouse.move(5, 5);
     await page.locator('[id$="--customerField-inner"]').hover();
     await page.waitForFunction(() => !window.__testLensShadow.querySelector(".hover-card"));
@@ -913,6 +909,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
       }
     }
     await context?.close();
+    server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     // This path is created exclusively by this test, within the OS temporary dir.
     if (profile.startsWith(path.join(os.tmpdir(), "ui5-lens-test-"))) fs.rmSync(profile, { recursive: true, force: true });

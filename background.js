@@ -6,6 +6,7 @@ let writes = Promise.resolve();
 let hoverCommands = Promise.resolve();
 let highlightCommands = Promise.resolve();
 const devtools = new Map();
+const updateChecks = new Map();
 const validToken = (value) => typeof value === "string" && /^h[a-f0-9]{32}_\d+$/.test(value);
 async function sourceRequest(tabId, token, frameId) {
   const results = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN",
@@ -50,6 +51,26 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const fromExtensionPage = sender.url?.startsWith(chrome.runtime.getURL(""));
   const tabId = fromExtensionPage ? message.tabId : sender.tab?.id;
   if (!Number.isInteger(tabId)) return;
+  if (message.action === "checkAppUpdates") {
+    const request = (updateChecks.get(tabId) || 0) + 1;
+    updateChecks.set(tabId, request);
+    chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN",
+      func: async (force) => { try { return await window.__UI5_LENS_UPDATES__?.check(force) || []; } catch { return []; } }, args: [Boolean(fromExtensionPage && message.force)] })
+      .then((frames) => {
+        const result = { tabId, updates: frames.flatMap(({ result }) => Array.isArray(result) ? result : []) };
+        if (updateChecks.get(tabId) === request) chrome.tabs.sendMessage(tabId, { channel: "ui5-lens", ...result }, { frameId: 0 }).catch(() => {});
+        if (updateChecks.get(tabId) === request) chrome.runtime.sendMessage({ channel: "ui5-lens", ...result }).catch(() => {});
+        reply(result);
+      })
+      .catch((error) => reply({ error: error.message }));
+    return true;
+  }
+  if (message.action === "reloadLaunchpad" && (fromExtensionPage || sender.frameId === 0)) {
+    // Only an explicit extension UI action reaches this branch. No data deletion.
+    chrome.tabs.reload(tabId, { bypassCache: true }).then(() => reply({ ok: true }))
+      .catch((error) => reply({ error: error.message }));
+    return true;
+  }
   if (message.action === "getXMLResources" && fromExtensionPage) {
     chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN",
       func: () => window.__UI5_TECH_LENS__?.xmlResources?.() || [] })
@@ -150,4 +171,4 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     return true;
   }
 });
-chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove([stateKey(tabId), `source:${tabId}`]));
+chrome.tabs.onRemoved.addListener((tabId) => { updateChecks.delete(tabId); chrome.storage.session.remove([stateKey(tabId), `source:${tabId}`]); });

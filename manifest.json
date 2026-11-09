@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "UI5 Technical Lens",
-  "version": "1.7.7",
+  "version": "1.7.9",
   "description": "Identifica la app SAPUI5 y superpone vistas, fragmentos, modelos y bindings OData sobre ventanas y campos.",
   "minimum_chrome_version": "114",
   "permissions": [
@@ -42,7 +42,8 @@
         "data-inspector.js",
         "controller-inspector.js",
         "event-inspector.js",
-        "inspector.js"
+        "inspector.js",
+        "update-probe.js"
       ],
       "run_at": "document_start",
       "world": "MAIN",
@@ -55,7 +56,8 @@
         "https://*/*"
       ],
       "js": [
-        "bridge.js"
+        "bridge.js",
+        "update-notice.js"
       ],
       "run_at": "document_start",
       "all_frames": true,

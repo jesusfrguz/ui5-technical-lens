@@ -36,6 +36,7 @@
   function onPageMessage(event) {
     if (event.source !== window || stopped) return;
     if (event.data?.channel === "ui5-lens:ready") send();
+    if (event.data?.channel === "ui5-lens:updates-request") void request("checkAppUpdates");
     if (event.data?.channel === "ui5-lens:hover-request" && event.data.command === "toggle") {
       void request("hoverCommand", { command: "toggle" });
     }

@@ -84,3 +84,13 @@ test("invalidation cleanup never touches chrome.runtime again, including listene
   for (const callback of fixture.runtimeListeners) callback({ channel: "ui5-lens", options: { enabled: true } });
   assert.equal(accesses, 0, "In-flight runtime callbacks short-circuit before touching the API");
 });
+
+test("app-entry signals only request a cached token comparison; page messages cannot request reload or force checks", async () => {
+  const fixture = setup(); await flush();
+  const sent = fixture.requests.length;
+  fixture.dispatch({ channel: "ui5-lens:updates-request", force: true });
+  fixture.dispatch({ channel: "ui5-lens:reloadLaunchpad" }); await flush();
+  assert.equal(fixture.requests.length, sent + 1);
+  assert.equal(fixture.requests.at(-1).action, "checkAppUpdates");
+  assert.equal(fixture.requests.at(-1).force, undefined);
+});

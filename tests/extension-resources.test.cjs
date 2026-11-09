@@ -66,6 +66,38 @@ test("handler location never reads extension scripts, even with an exact URL mat
 });
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 15));
+test("a first method jump maps inherited provider dependencies without opening their files", async () => {
+  const docs = [
+    { url: "https://app.test/controller/detailLayout.controller.js?eval", content: 'sap.ui.define(["app/controller/Detail.controller"], function (Detail) { return Detail.extend("app.detailLayout", { save: function () { this.avisosProvider.changeStatus(); } }); });' },
+    { url: "https://app.test/controller/Detail.controller.js?eval", content: 'sap.ui.define(["app/controller/Base.controller"], function (Base) { return Base.extend("app.Detail", {}); });' },
+    { url: "https://app.test/controller/Base.controller.js?eval", content: 'sap.ui.define(["app/providers/avisos.provider"], function (avisosProvider) { return Controller.extend("app.Base", { avisosProvider: avisosProvider }); });' },
+    { url: "https://app.test/providers/avisos.provider.js?eval", content: 'sap.ui.define([], function () { return { changeStatus: function () { throw new Error("Never execute"); } }; });' }
+  ];
+  const h = harness("code-panel.js", []);
+  h.run('files = () => {}; syncSearch = () => {}; show = (location) => { current = location; };');
+  await tick();
+  h.context.UI5CodeNavigation = require("../code-navigation.js");
+  h.context.testDocs = docs;
+  h.run('resources = testDocs; current = { url: testDocs[0].url };');
+  const queries = [];
+  h.context.chrome.devtools.inspectedWindow.eval = (expression, done) => {
+    const loader = { toUrl(id) { queries.push(id); return "/" + id.replace(/^app\//, ""); } };
+    done(vm.runInNewContext(expression, { sap: { ui: { require: loader } }, URL, location: { href: "https://app.test/" } }));
+  };
+  await h.run(`navigate(${docs[0].content.indexOf("changeStatus()")})`);
+  assert.equal(h.run("current.url"), docs[3].url);
+  assert.equal(h.run("current.offset"), docs[3].content.indexOf("changeStatus:"));
+  assert.deepEqual(queries, ["app/controller/Detail.controller.js", "app/controller/Base.controller.js", "app/providers/avisos.provider.js"]);
+
+  // A loader that cannot supply a new mapping must not cause endless retries.
+  h.run('moduleUrls = Object.create(null); navigationDirty = true; current = { url: testDocs[0].url };');
+  let failures = 0;
+  h.context.chrome.devtools.inspectedWindow.eval = (expression, done) => { failures++; done([], true); };
+  await h.run(`navigate(${docs[0].content.indexOf("changeStatus()")})`);
+  assert.equal(failures, 1);
+  assert.match(h.elements.get("status").textContent, /No se puede resolver/);
+});
+
 test("runtime XML inventory appears without a DevTools resource and reads only the selected source", async () => {
   const h = harness("code-panel.js", [{ url: "https://app.test/Component.js?eval", type: "script", getContent(done) { done("function component() {}", ""); } }]);
   const descriptor = { url: "https://app.test/view/Main.view.xml", path: "demo/view/Main.view.xml", key: "view:main", frameId: 7, controllers: ["demo.controller.Main"] };

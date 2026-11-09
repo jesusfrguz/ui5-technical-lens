@@ -12,8 +12,9 @@ async function background(action, extra = {}) {
   return response;
 }
 async function inject() {
-  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN", files: ["core.js", "data-inspector.js", "controller-inspector.js", "event-inspector.js", "inspector.js"] });
+  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN", files: ["core.js", "data-inspector.js", "controller-inspector.js", "event-inspector.js", "inspector.js", "update-probe.js"] });
   await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["bridge.js"] });
+  await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["update-notice.js"] });
 }
 async function inspect() {
   const results = await chrome.scripting.executeScript({
@@ -136,7 +137,9 @@ async function locate(entry) {
 }
 function syncOptions() { for (const key of optionKeys) $(key).checked = Boolean(options[key]); }
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.channel !== "ui5-lens" || message.tabId !== tabId || !message.sourceResult) return;
+  if (message?.channel !== "ui5-lens" || message.tabId !== tabId) return;
+  if (Array.isArray(message.updates)) renderUpdates(message.updates);
+  if (!message.sourceResult) return;
   for (const button of document.querySelectorAll("[data-handler-token]")) if (button.dataset.handlerToken === message.sourceResult.token) button.nextElementSibling.textContent = message.sourceResult.status;
 });
 function showError(error) { message(`No se pudo inspeccionar esta pestaña. ${error.message || error}`, true); }
@@ -155,6 +158,31 @@ for (const key of optionKeys) $(key).addEventListener("change", async () => {
   finally { updating = false; for (const name of optionKeys) $(name).disabled = false; }
 });
 $("search").addEventListener("input", render);
+async function checkUpdates(force = false) {
+  $("check-updates").disabled = true;
+  try {
+    const result = await background("checkAppUpdates", { force });
+    renderUpdates(result?.updates || []);
+  } catch { $("update-status").textContent = "No se pudieron comprobar los tokens. Vuelve a intentarlo."; }
+  finally { $("check-updates").disabled = false; }
+}
+function renderUpdates(updates) {
+  const changed = updates.filter((item) => item.state === "changed");
+  $("reload-launchpad").hidden = !changed.length;
+  $("update-status").parentElement.classList.toggle("changed", Boolean(changed.length));
+  $("update-status").textContent = changed.length
+    ? "El token cargado difiere del actual en ABAP. Guarda los cambios antes de recargar todo el Launchpad."
+    : updates.some((item) => item.state === "unavailable")
+      ? "No se pudo comparar el token cargado con el actual de ABAP. No se puede confirmar la versión."
+      : updates.length ? "Los tokens cargados coinciden con ABAP. Comprobación al entrar en la app, sin consultas periódicas."
+        : "Sin aplicación ABAP activa detectada. Abre la app y pulsa Comprobar cambios.";
+}
+$("check-updates").addEventListener("click", () => checkUpdates(true));
+$("reload-launchpad").addEventListener("click", async () => {
+  $("reload-launchpad").disabled = true;
+  try { await background("reloadLaunchpad"); window.close(); }
+  catch (error) { $("update-status").textContent = error.message; $("reload-launchpad").disabled = false; }
+});
 $("refresh").addEventListener("click", () => refresh().catch(showError));
 $("reload").addEventListener("click", async () => {
   try {
@@ -174,6 +202,7 @@ $("reload").addEventListener("click", async () => {
     $("app-url").textContent = tab.url; $("app-url").title = tab.url;
     options = await background("getOptions"); syncOptions();
     await inject(); await refresh();
+    await checkUpdates();
     // Resolve components/titles that become available after UI5 startup.
     setInterval(() => { if (!busy && !updating) refresh().catch(showError); }, 2000);
   } catch (error) { for (const key of optionKeys) $(key).disabled = true; $("reload").disabled = true; $("runtime").textContent = "Pestaña no disponible"; showError(error); }
