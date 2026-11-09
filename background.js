@@ -14,6 +14,14 @@ async function sourceRequest(tabId, token, frameId) {
   if (!descriptor?.source) throw new Error("La función ya no está disponible. Actualiza la inspección.");
   return { action: "openHandler", token, requestId: token, descriptor };
 }
+async function xmlRequest(tabId, key, frameId) {
+  if (!Number.isInteger(frameId) || typeof key !== "string") throw new Error("Marco o elemento no válido.");
+  const result = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN",
+    func: (key) => window.__UI5_TECH_LENS__?.describeXML(key), args: [key] });
+  const descriptor = result[0]?.result;
+  if (!descriptor?.url || !/^https?:/.test(descriptor.url)) throw new Error("El XML ya no está disponible. Actualiza la detección.");
+  return { action: "openXML", descriptor: { ...descriptor, key, frameId } };
+}
 function sourceResult(tabId, token, status) {
   const result = { channel: "ui5-lens", tabId, sourceResult: { token, status: String(status).slice(0, 300) } };
   chrome.tabs.sendMessage(tabId, result).catch(() => {});
@@ -28,7 +36,7 @@ chrome.runtime.onConnect.addListener((port) => {
       const key = `source:${tabId}`, stored = await chrome.storage.session.get(key);
       if (stored[key]) {
         await chrome.storage.session.remove(key);
-        try { port.postMessage(await sourceRequest(tabId, stored[key].token, stored[key].frameId)); }
+        try { port.postMessage(stored[key].action === "openXML" ? await xmlRequest(tabId, stored[key].key, stored[key].frameId) : await sourceRequest(tabId, stored[key].token, stored[key].frameId)); }
         catch (error) { sourceResult(tabId, stored[key].token, error.message); }
       }
     } else if (message.action === "result" && Number.isInteger(tabId) && validToken(message.requestId)) {
@@ -42,6 +50,48 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const fromExtensionPage = sender.url?.startsWith(chrome.runtime.getURL(""));
   const tabId = fromExtensionPage ? message.tabId : sender.tab?.id;
   if (!Number.isInteger(tabId)) return;
+  if (message.action === "getXMLResources" && fromExtensionPage) {
+    chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: "MAIN",
+      func: () => window.__UI5_TECH_LENS__?.xmlResources?.() || [] })
+      .then((frames) => reply({ resources: frames.flatMap(({ frameId, result }) => (Array.isArray(result) ? result : []).map((entry) => ({ ...entry, frameId }))) }))
+      .catch((error) => reply({ error: error.message }));
+    return true;
+  }
+  if (message.action === "readXML" && fromExtensionPage) {
+    (async () => {
+      if (!Number.isInteger(message.frameId) || typeof message.key !== "string") throw new Error("Marco o elemento no válido.");
+      const result = await chrome.scripting.executeScript({ target: { tabId, frameIds: [message.frameId] }, world: "MAIN",
+        func: async (key) => {
+          try {
+            const descriptor = window.__UI5_TECH_LENS__?.describeXML(key);
+            if (!descriptor?.url || !/^https?:/.test(descriptor.url) || !/\.(?:view|fragment)\.xml(?:[?#]|$)/i.test(descriptor.url)) throw new Error("Ruta XML no disponible.");
+            // Read just the requested source using the page's normal origin/CORS
+            // rules. Prefer the browser cache; never refresh data or load UI5 modules.
+            const response = await fetch(descriptor.url, { credentials: "same-origin", cache: "force-cache", signal: AbortSignal.timeout(10000) });
+            if (!response.ok) throw new Error(`HTTP ${response.status} al leer el XML.`);
+            const content = await response.text();
+            if (content.length > 2000000) throw new Error("El XML supera el límite de 2 MB del visor.");
+            const start = content.replace(/^\s*<\?xml[^>]*>/i, "").replace(/^(?:\s*<!--[\s\S]*?-->)+/, "").trimStart();
+            if (!/^<[A-Za-z_][\w:.-]*(?:\s|\/?>)/.test(start) || /^<(?:[\w.-]+:)?(?:html|script)(?:\s|>)/i.test(start)) throw new Error("La respuesta no contiene XML de UI5 (posible página de acceso).");
+            return { content, descriptor };
+          } catch (error) { return { error: error.message || "No se pudo leer el XML." }; }
+        }, args: [message.key] });
+      reply(result[0]?.result || { error: "El marco ya no está disponible." });
+    })().catch((error) => reply({ error: error.message }));
+    return true;
+  }
+  if (message.action === "openXML" && fromExtensionPage) {
+    (async () => {
+      const request = await xmlRequest(tabId, message.key, message.frameId);
+      const port = devtools.get(tabId);
+      if (port) { port.postMessage(request); reply({ status: "XML enviado. Selecciona la pestaña UI5 Code de DevTools." }); }
+      else {
+        await chrome.storage.session.set({ [`source:${tabId}`]: { action: "openXML", key: message.key, frameId: message.frameId } });
+        reply({ status: "Abre DevTools con F12 y selecciona UI5 Code para ver el XML solicitado." });
+      }
+    })().catch((error) => reply({ error: error.message }));
+    return true;
+  }
   if (message.action === "openHandler" && validToken(message.token)) {
     (async () => {
       const frameId = fromExtensionPage ? message.frameId : sender.frameId;

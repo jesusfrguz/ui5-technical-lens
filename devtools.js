@@ -37,6 +37,13 @@ function connect() {
   post({ action: "connect", tabId: chrome.devtools.inspectedWindow.tabId });
   port.onDisconnect.addListener(() => { generation++; if (available()) setTimeout(connect, 500); });
   port.onMessage.addListener(async (message) => {
+    if (message.action === "openXML" && /^https?:/.test(message.descriptor?.url || "")) {
+      generation++;
+      const location = { ...message.descriptor, line: 0, column: 0, xmlContext: message.descriptor.controllers || [] };
+      lastCodeLocation = location;
+      if (codeWindow?.openLocation) { codeWindow.openLocation(location); lastCodeLocation = null; }
+      return;
+    }
     if (message.action !== "openHandler" || !validToken(message.token)) return;
     const request = ++generation;
     try {

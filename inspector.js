@@ -1029,7 +1029,26 @@
     if (!pinned && !hoverLayer?.querySelector(".hover-card")) return;
     dismissedNode = pinned?.hoverNode || pinned?.node || activeHoverNode; releasePinned(); selected = ""; activeHoverNode = null; hoverLayer?.replaceChildren();
   }
-  const api = Object.freeze({ snapshot, setOptions, focus, isPinned: () => Boolean(pinned), pin: pinHovered, release: releaseCard, highlightTargets });
+  function describeXML(key) {
+    collect();
+    const entry = entries.find((item) => item.key === key && ["view", "fragment"].includes(item.kind) && /\.xml$/.test(item.path));
+    if (!entry) return null;
+    return xmlDescriptor(entry);
+  }
+  function xmlDescriptor(entry) {
+    const info = C.inspect(entry);
+    const controllers = info.controllers.filter((c) => c.role === "principal");
+    return { path: entry.path, url: safe(() => new URL(window.sap.ui.require.toUrl(entry.path), location.href).href, ""),
+      controllers: controllers.map((c) => c.name),
+      moduleUrls: Object.fromEntries(controllers.map((c) => [c.name.startsWith("module:") ? c.name.slice(7).replace(/\.js$/, "") : c.name.replace(/\./g, "/") + ".controller",
+        safe(() => new URL(window.sap.ui.require.toUrl(c.path), location.href).href, "")])) };
+  }
+  function xmlResources() {
+    collect();
+    return entries.filter((entry) => ["view", "fragment"].includes(entry.kind) && /\.(?:view|fragment)\.xml$/.test(entry.path))
+      .map((entry) => ({ ...xmlDescriptor(entry), key: entry.key }));
+  }
+  const api = Object.freeze({ snapshot, describeXML, xmlResources, setOptions, focus, isPinned: () => Boolean(pinned), pin: pinHovered, release: releaseCard, highlightTargets });
   Object.defineProperty(window, "__UI5_TECH_LENS__", { value: api, configurable: true });
   window.addEventListener("message", (event) => {
     if (event.source === window && event.data?.channel === "ui5-lens:options") setOptions(event.data.options);

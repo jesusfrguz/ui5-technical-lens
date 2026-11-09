@@ -179,6 +179,27 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ui5-lens-test-"));
     assert.equal(await popup.locator("#app-service-path").textContent(), "/sap/bc/ui5_ui5/sap/zlens_demo");
     await popup.getByText("demo/fragment/Summary.fragment.xml", { exact: true }).first().waitFor();
     assert.ok((await popup.locator("#runtime").textContent()).includes("2 marcos"));
+    const xmlButton = popup.getByRole("button", { name: "Abrir demo/view/Main.view.xml en UI5 Code", exact: true }).first();
+    await xmlButton.click();
+    await popup.waitForFunction(() => document.getElementById("message").textContent.includes("selecciona UI5 Code"));
+    const pendingXML = await worker.evaluate(async (id) => (await chrome.storage.session.get(`source:${id}`))[`source:${id}`], tabId);
+    assert.equal(pendingXML.action, "openXML", "XML request waits for DevTools");
+    assert.equal(pendingXML.frameId, 0, "The popup preserves the exact inspected frame");
+    assert.equal(pendingXML.descriptor, undefined, "XML code and URLs are not persisted in session storage");
+    const xmlDescriptor = await page.evaluate((key) => window.__UI5_TECH_LENS__.describeXML(key), pendingXML.key);
+    assert.ok(xmlDescriptor.url.endsWith("/view/Main.view.xml"));
+    assert.deepEqual(xmlDescriptor.controllers, ["demo.controller.Main"]);
+    const xmlInventory = await popup.evaluate((id) => chrome.runtime.sendMessage({ channel: "ui5-lens", action: "getXMLResources", tabId: id }), tabId);
+    assert.ok(xmlInventory.resources.some((r) => r.path === "demo/view/Main.view.xml" && r.frameId === 0), "XML inventory comes from the runtime independently of DevTools");
+    const iframeXML = xmlInventory.resources.find((r) => r.path === "demo/view/Main.view.xml" && r.frameId !== 0);
+    assert.ok(iframeXML, "XML inventory includes views in other frames");
+    for (const source of [xmlInventory.resources.find((r) => r.path === "demo/view/Main.view.xml" && r.frameId === 0), iframeXML]) {
+      const read = await popup.evaluate(({ id, source }) => chrome.runtime.sendMessage({ channel: "ui5-lens", action: "readXML", tabId: id, key: source.key, frameId: source.frameId }), { id: tabId, source });
+      assert.equal(read.error, undefined, JSON.stringify(read));
+      assert.ok(read.content.includes("controllerName=\"demo.controller.Main\""));
+      assert.ok(read.content.includes("onLoadDetails"), "The source read returns XML, not Component.js?eval");
+    }
+    await worker.evaluate((id) => chrome.storage.session.remove(`source:${id}`), tabId);
     await popup.screenshot({ path: path.join(output, "popup.png"), fullPage: true });
     await popup.locator("#search").fill("OrderDialog");
     assert.equal(await popup.locator(".file").count(), 1);

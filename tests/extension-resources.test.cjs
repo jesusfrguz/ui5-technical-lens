@@ -51,6 +51,8 @@ test("UI5 Code excludes extension content before reading and indexing resources"
   assert.equal(h.timers.size, 0, "Extension additions do not schedule refreshes");
   assert.equal(h.enumerations(), 2, "Opening excluded locations does not enumerate resources again");
   assert.equal(h.elements.get("last").disabled, true, "Excluded locations do not enable last-function navigation");
+  h.added({ url: "debugger:///VM123", type: "script" });
+  assert.equal(h.timers.size, 0, "Runtime inventory queries cannot trigger an endless resource-refresh loop");
   assert.ok(allowed.includes(h.run("current.url")));
   h.added({ url: allowed[0], type: "script" });
   assert.equal(h.timers.size, 1, "Application scripts still schedule refreshes");
@@ -64,6 +66,42 @@ test("handler location never reads extension scripts, even with an exact URL mat
 });
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 15));
+test("runtime XML inventory appears without a DevTools resource and reads only the selected source", async () => {
+  const h = harness("code-panel.js", [{ url: "https://app.test/Component.js?eval", type: "script", getContent(done) { done("function component() {}", ""); } }]);
+  const descriptor = { url: "https://app.test/view/Main.view.xml", path: "demo/view/Main.view.xml", key: "view:main", frameId: 7, controllers: ["demo.controller.Main"] };
+  const calls = [];
+  h.context.testSend = async (message) => { calls.push(message); return message.action === "getXMLResources" ? { resources: [descriptor] } : { content: '<View controllerName="demo.controller.Main"><Button press=".onSave"/></View>' }; };
+  h.run('chrome.runtime.sendMessage = testSend; files = () => {}; render = () => {}; markCurrentFile = () => {}; syncSearch = () => {};');
+  await h.run("refresh()");
+  assert.ok(h.run("resources.some(r => r.url.endsWith('Main.view.xml'))"), "The runtime adds XML omitted by DevTools");
+  assert.equal(calls.filter((m) => m.action === "readXML").length, 0, "Discovery does not download XML source");
+  await h.run(`window.openLocation(${JSON.stringify({ ...descriptor, xmlContext: descriptor.controllers })})`);
+  assert.equal(h.run("current.url"), descriptor.url, "The requested XML replaces Component.js?eval");
+  assert.equal(calls.filter((m) => m.action === "readXML")[0].frameId, 7, "The source is read from its actual frame");
+  assert.deepEqual(JSON.parse(h.run("JSON.stringify(current.xmlContext)")), descriptor.controllers);
+  await h.run(`show(${JSON.stringify({ url: descriptor.url })})`);
+  assert.equal(calls.filter((m) => m.action === "readXML").length, 1, "Repeat selections reuse the XML content");
+});
+
+test("an XML request during initial loading survives the component selection and missing resources never open another script", async () => {
+  let complete;
+  const h = harness("code-panel.js", [{ url: "https://app.test/Component.js?eval", type: "script", getContent(done) { if (complete) done("function component() {}", ""); else complete = done; } }]);
+  const descriptor = { url: "https://app.test/view/Main.view.xml", key: "view:main", frameId: 0, controllers: [] };
+  h.context.testSend = async (m) => m.action === "getXMLResources" ? { resources: [descriptor] } : { content: '<View><Button press=".onSave"/></View>' };
+  h.run('files = () => {}; render = () => {}; markCurrentFile = () => {}; syncSearch = () => {};');
+  await tick();
+  h.run('chrome.runtime.sendMessage = testSend;');
+  const opening = h.run(`window.openLocation(${JSON.stringify(descriptor)})`);
+  await tick();
+  complete("function component() {}", "");
+  await opening;
+  assert.equal(h.run("current.url"), descriptor.url);
+  h.context.testSend = async () => ({ resources: [] });
+  await h.run('window.openLocation({url:"https://app.test/missing.view.xml"})');
+  assert.equal(h.run("current"), null, "Missing XML cannot silently open Component.js?eval");
+  assert.match(h.elements.get("status").textContent, /recurso no está/);
+});
+
 test("requested file is shown while unrelated resource reads are still pending", async () => {
   const callbacks = new Map(), reads = [];
   const urls = ["https://app.test/A.js", "https://app.test/B.js", "https://app.test/Target.js"];
@@ -83,7 +121,7 @@ test("requested file is shown while unrelated resource reads are still pending",
   assert.equal(reads.filter(url => url === urls[2]).length, 1, "The background load reuses the target content");
   callbacks.get(urls[1])("function other() {}", "");
   await tick();
-  assert.match(h.elements.get("load-status").textContent, /3 scripts disponibles/);
+  assert.match(h.elements.get("load-status").textContent, /3 archivos disponibles/);
 });
 
 test("a newer selection and page navigation discard pending reads", async () => {

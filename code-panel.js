@@ -10,6 +10,35 @@ const resultButtons = new Map();
 const folderStates = new Map(), fileButtons = new Map();
 // Exclude extension origins, including object URLs created by extensions.
 const isExtensionResource = (url) => /^\s*(?:(?:blob|filesystem):)*chrome-extension:/i.test(url);
+const isXML = (url) => /\.(?:view|fragment)\.xml(?:[?#]|$)/i.test(url);
+const scriptResources = () => resources.filter((r) => !isXML(r.url) && typeof r.content === "string");
+function findResource(location) {
+  if (!location) return null;
+  // Keep the exact frame association even for iframes with identical URLs.
+  return resources.find((r) => r.url === location.url && (!location.key || r.xmlDescriptor?.key === location.key && r.xmlDescriptor?.frameId === location.frameId))
+    || resources.find((r) => r.url === location.url)
+    || (location.path && resources.find((r) => r.path === location.path));
+}
+async function discoverXML(request) {
+  if (!chrome.runtime?.sendMessage) return;
+  try {
+    const result = await chrome.runtime.sendMessage({ channel: "ui5-lens", action: "getXMLResources", tabId: chrome.devtools.inspectedWindow.tabId });
+    if (request !== loading) return;
+    for (const descriptor of result?.resources || []) {
+      if (!isXML(descriptor.url) || !/^https?:/.test(descriptor.url) || typeof descriptor.key !== "string" || !Number.isInteger(descriptor.frameId)) continue;
+      const existing = resources.find((r) => r.url === descriptor.url);
+      // Resource content can be shared for identical URLs; controller context
+      // from a popup request still overrides the tree's default association.
+      if (existing) { existing.xmlDescriptor ||= descriptor; existing.path ||= descriptor.path; continue; }
+      resources.push({ url: descriptor.url, path: descriptor.path, runtimeXML: true, synthetic: true, xmlDescriptor: descriptor,
+        source: { getContent(done) {
+          chrome.runtime.sendMessage({ channel: "ui5-lens", action: "readXML", tabId: chrome.devtools.inspectedWindow.tabId, key: descriptor.key, frameId: descriptor.frameId })
+            .then((result) => { if (result?.error) { this.error = result.error; done(null); } else done(result?.content); })
+            .catch((error) => { this.error = error.message; done(null); });
+        } } });
+    }
+  } catch { /* The source inventory remains usable when a frame is inaccessible. */ }
+}
 function resourceParts(url) {
   try {
     const parsed = new URL(url);
@@ -47,6 +76,7 @@ function files() {
     for (const file of folder.files.sort((a, b) => a.name.localeCompare(b.name))) {
       const item = document.createElement("li"), button = document.createElement("button");
       button.className = "file"; button.textContent = file.name; button.title = file.url; button.dataset.url = file.url;
+      if (isXML(file.url)) button.classList.add("xml-file");
       button.onclick = () => show({ url: file.url, line: 0, column: 0 });
       fileButtons.set(file.url, button); item.append(button); list.append(item);
     }
@@ -81,18 +111,21 @@ function readResource(resource, request = loading) {
 }
 async function refresh() {
   const request = ++loading;
-  status("Leyendo lista de scripts…", "load-status");
+  status("Leyendo lista de archivos…", "load-status");
   resourcesReady = timed((done) => chrome.devtools.inspectedWindow.getResources(done));
   try {
     const list = await resourcesReady;
     if (request !== loading) return;
-    resources = [...new Map(list.filter((r) => !isExtensionResource(r.url) && (r.type === "script" || /\.[cm]?js(?:[?#]|$)/i.test(r.url)))
+    resources = [...new Map(list.filter((r) => !isExtensionResource(r.url) && (r.type === "script" || /\.[cm]?js(?:[?#]|$)/i.test(r.url) || isXML(r.url)))
       .map((r) => [r.url, { url: r.url, source: r }])).values()].sort((a, b) => a.url.localeCompare(b.url));
+    await discoverXML(request);
+    if (request !== loading) return;
     navigation = null; navigationDirty = true;
     const preferred = pendingLocation || (current && { ...current, scrollTop: $("viewport").scrollTop, scrollLeft: $("viewport").scrollLeft }) || lastLocation;
-    const location = resources.some((r) => r.url === preferred?.url) ? preferred : resources.length ? { url: resources[0].url, line: 0, column: 0 } : null;
+    const preferredResource = findResource(preferred);
+    const location = preferredResource ? { ...preferred, url: preferredResource.url } : !pendingLocation && !isXML(preferred?.url || "") && resources.length ? { url: resources[0].url, line: 0, column: 0 } : null;
     // Show the requested file before building the tree or reading other contents.
-    if (location) await show(location, false);
+    if (location) await show(location, false, Boolean(pendingLocation));
     else { current = null; $("code").replaceChildren(); $("sources").disabled = true; $("filename").textContent = "Selecciona un archivo"; syncSearch(); }
     if (request !== loading) return;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -100,29 +133,63 @@ async function refresh() {
     files();
     let next = 0, completed = 0;
     await Promise.all(Array.from({ length: Math.min(6, resources.length) }, async () => {
-      const scripts = resources;
+      const scripts = resources.filter((r) => !r.runtimeXML);
       while (request === loading && next < scripts.length) {
         await readResource(scripts[next++], request);
         if (request !== loading) return;
         completed++;
-        status(`Cargando scripts en segundo plano: ${completed}/${scripts.length}…`, "load-status");
+        status(`Cargando archivos en segundo plano: ${completed}/${scripts.length}…`, "load-status");
         // Yield to painting and input even if DevTools serves cached contents.
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     }));
     if (request !== loading) return;
+    await addPreloadXML(request);
+    if (request !== loading) return;
+    files();
+    if (pendingLocation && findResource(pendingLocation)) {
+      const resource = findResource(pendingLocation);
+      await show({ ...pendingLocation, url: resource.url }, false);
+    }
     const failed = resources.filter((r) => r.failed).length;
-    status(`${resources.length - failed} scripts disponibles.${failed ? ` ${failed} recursos no se pudieron leer.` : ""}`, "load-status");
+    status(`${resources.length - failed} archivos disponibles.${failed ? ` ${failed} recursos no se pudieron leer.` : ""}`, "load-status");
     syncSearch();
   } catch (error) { if (request === loading) status(error.message, "load-status"); }
 }
 
+async function addPreloadXML(request) {
+  const xml = [];
+  if (typeof UI5CodeXML === "undefined") return;
+  for (const resource of scriptResources().filter((r) => r.content.includes("preload") && /\.(?:view|fragment)\.xml/.test(r.content))) {
+    for (const entry of UI5CodeXML.preloads(resource.content, acorn)) xml.push({ ...entry, preload: resource.url });
+  }
+  if (!xml.length) return;
+  let mapped = [];
+  if (chrome.devtools.inspectedWindow.eval) {
+    const paths = [...new Set(xml.map((r) => r.path))];
+    try { mapped = await timed((done) => chrome.devtools.inspectedWindow.eval(`(() => { const loader = globalThis.sap?.ui?.require; return ${JSON.stringify(paths)}.map(path => { try { return [path, new URL(loader.toUrl(path), location.href).href]; } catch { return null; } }).filter(Boolean); })()`, (value, error) => done(error ? [] : value))); } catch { /* Keep a local source view if loader URLs cannot be resolved. */ }
+  }
+  if (request !== loading) return;
+  const urls = new Map(Array.isArray(mapped) ? mapped.filter((p) => Array.isArray(p) && typeof p[1] === "string" && /^https?:/.test(p[1])) : []);
+  for (const entry of xml) {
+    const url = urls.get(entry.path) || new URL(entry.path, entry.preload).href;
+    if (!/^https?:/.test(url) || isExtensionResource(url)) continue;
+    const existing = resources.find((r) => r.url === url || r.path === entry.path);
+    if (existing?.runtimeXML && typeof existing.content !== "string") { existing.content = entry.content; existing.preload = entry.preload; }
+    else if (!existing) resources.push({ ...entry, url, synthetic: true });
+  }
+  navigationDirty = true; searchKey = "";
+}
+
 function render(resource) {
-  const tokens = [];
-  const moduleOffsets = new Set(UI5CodeNavigation.create([resource]).moduleOffsets(resource.url));
+  const xml = isXML(resource.url);
+  const tokens = xml ? UI5CodeXML.inspect(resource.content).tokens : [];
+  const moduleOffsets = new Set(xml ? [] : UI5CodeNavigation.create([resource]).moduleOffsets(resource.url));
   try {
+    if (!xml) {
     const tokenizer = acorn.tokenizer(resource.content, { ecmaVersion: "latest", allowHashBang: true, onComment: (_block, _text, start, end) => tokens.push({ start, end, style: "comment" }) });
     for (;;) { const t = tokenizer.getToken(); if (t.type.label === "eof") break; if (t.type.label === "name" || t.type.keyword || ["string", "template", "regexp"].includes(t.type.label)) tokens.push({ start: t.start, end: t.end, style: t.type.label === "name" ? "identifier" : t.type.keyword ? "keyword" : "string" }); }
+    }
   } catch { /* Unparseable resources remain readable as plain text. */ }
   tokens.sort((a, b) => a.start - b.start);
   const fragment = document.createDocumentFragment(); let offset = 0, tokenIndex = 0;
@@ -137,7 +204,7 @@ function render(resource) {
       if (start > position) row.append(document.createTextNode(resource.content.slice(position, start)));
       if (stop > start) {
         const span = document.createElement("span"); span.className = t.style; span.textContent = resource.content.slice(start, stop);
-        if (t.style === "identifier") { span.dataset.offset = t.start; span.tabIndex = 0; span.title = "Ctrl+clic: ir a la definición"; }
+        if (t.style.includes("identifier")) { span.dataset.offset = t.start; span.tabIndex = 0; span.title = t.method ? `Ctrl+clic: ir al método ${t.method} del controlador (${t.event})` : "Ctrl+clic: ir a la definición"; }
         if (moduleOffsets.has(t.start)) { span.classList.add("module-reference"); span.dataset.offset = t.start; span.tabIndex = 0; span.title = "Ctrl+clic: abrir módulo importado"; }
         row.append(span); position = stop;
       }
@@ -147,18 +214,28 @@ function render(resource) {
   $("code").replaceChildren(fragment);
 }
 async function show(location, remember = true, focusCode = true) {
+  if (remember) pendingLocation = null;
   const chosen = ++selection, request = loading;
   const resource = resources.find((r) => r.url === location.url);
   if (!resource) { status("El recurso ya no está cargado. Pulsa Actualizar."); return; }
+  if (isXML(resource.url)) {
+    if (resource.xmlDescriptor) location = { ...resource.xmlDescriptor, xmlContext: resource.xmlDescriptor.controllers, ...location };
+    if (location.xmlContext) resource.xmlContext = location.xmlContext;
+    location = { ...location, xmlContext: location.xmlContext ?? resource.xmlContext };
+    if (location.moduleUrls) { Object.assign(moduleUrls, location.moduleUrls); navigationDirty = true; }
+  }
   if (typeof resource.content !== "string") {
     status(`Cargando ${location.url}…`);
     const loaded = await readResource(resource, request);
     if (chosen !== selection || request !== loading) return;
-    if (!loaded) { status("No se pudo leer el recurso. Pulsa Actualizar para reintentarlo."); return; }
+    if (!loaded) {
+      current = null; $("code").replaceChildren(); $("filename").textContent = resourceParts(location.url).at(-1); $("sources").disabled = true;
+      status(resource.source?.error || "No se pudo leer el recurso. Pulsa Actualizar para reintentarlo."); return;
+    }
   }
   if (remember && current) history.push({ ...current, scrollTop: $("viewport").scrollTop, scrollLeft: $("viewport").scrollLeft });
   if (current?.url !== location.url || current.revision !== revision) render(resource);
-  current = { ...location, revision }; $("back").disabled = !history.length; $("sources").disabled = false;
+  current = { ...location, revision }; $("back").disabled = !history.length; $("sources").disabled = Boolean(resource.synthetic);
   if (!fileButtons.has(location.url) && $("filter").value) { $("filter").value = ""; files(); }
   markCurrentFile(true);
   $("filename").textContent = resourceParts(location.url).at(-1); $("filename").title = location.url;
@@ -315,12 +392,23 @@ async function navigate(offset) {
   if (!current) return;
   const jump = ++jumpRequest, chosen = selection, request = loading, url = current.url;
   if (navigationDirty || !navigation) {
-    navigation = UI5CodeNavigation.create(resources.filter((r) => typeof r.content === "string"), { moduleUrls });
+    navigation = UI5CodeNavigation.create(scriptResources(), { moduleUrls });
     navigationDirty = false;
   }
-  let result = navigation.resolve(url, offset);
+  const resource = resources.find((r) => r.url === url);
+  const xml = isXML(url);
+  const controllers = xml ? UI5CodeXML.controllerNames(resource, resources, current.xmlContext) : [];
+  const token = xml ? UI5CodeXML.inspect(resource.content).tokens.find((t) => t.method && t.start <= offset && offset < t.end) : null;
+  const resolve = () => {
+    if (!xml) return navigation.resolve(url, offset);
+    if (!controllers.length) return { error: "No se conoce el controlador de este fragmento. Ábrelo desde el botón XML del inspector para usar su asociación actual." };
+    const locations = token ? controllers.flatMap((name) => navigation.controllerMethod(name, token.method)) : [];
+    const unique = [...new Map(locations.map((l) => [`${l.url}:${l.offset}`, l])).values()];
+    return unique.length ? { locations: unique } : { error: `No se puede resolver «${token?.method || "evento"}» en el controlador asociado con el código cargado.` };
+  };
+  let result = resolve();
   if (result.error && chrome.devtools.inspectedWindow.eval) {
-    const names = navigation.moduleNames(url);
+    const names = xml ? controllers.map((name) => name.startsWith("module:") ? name.slice(7).replace(/\.js$/, "") : name.replace(/\./g, "/") + ".controller").filter((name) => !Object.hasOwn(moduleUrls, name)) : navigation.moduleNames(url);
     if (names.length) {
       status("Consultando las rutas del cargador UI5…");
       // Only resolve URLs with UI5's loader. Never load a module or invoke an
@@ -332,9 +420,9 @@ async function navigate(offset) {
       for (const pair of Array.isArray(mapped) ? mapped : []) {
         if (Array.isArray(pair) && names.includes(pair[0]) && typeof pair[1] === "string" && !isExtensionResource(pair[1])) moduleUrls[pair[0]] = pair[1];
       }
-      navigation = UI5CodeNavigation.create(resources.filter((r) => typeof r.content === "string"), { moduleUrls });
+      navigation = UI5CodeNavigation.create(scriptResources(), { moduleUrls });
       navigationDirty = false;
-      result = navigation.resolve(url, offset);
+      result = resolve();
     }
   }
   $("candidates").replaceChildren(); $("candidates").hidden = true;
@@ -362,23 +450,30 @@ $("find-all").onchange = $("find-case").onchange = searchChanged;
 $("search-more").onclick = () => { resultLimit += 200; renderSearchResults(); paintSearch(); };
 $("refresh").onclick = () => { revision++; refresh(); };
 $("sources").onclick = () => { if (current) chrome.devtools.panels.openResource(current.url, current.line || 0, current.column || 0); };
-$("last").onclick = () => { if (lastLocation) show(lastLocation); };
+$("last").onclick = () => { if (lastLocation) window.openLocation(lastLocation); };
 // Called by the persistent DevTools page when an inspected handler is located.
 window.openLocation = async (location) => {
   if (isExtensionResource(location.url)) return;
   lastLocation = pendingLocation = location; $("last").disabled = false;
-  const chosen = ++selection;
+  $("last").textContent = isXML(location.url) ? "Último XML" : "Última función";
+  ++selection;
   try {
     await resourcesReady.catch(() => {});
-    if (chosen !== selection || lastLocation !== location) return;
-    if (!resources.some((r) => r.url === location.url)) { revision++; void refresh(); await resourcesReady.catch(() => {}); }
-    if (chosen !== selection || lastLocation !== location) return;
-    return await show(location);
+    if (pendingLocation !== location || lastLocation !== location) return;
+    if (!findResource(location)) { revision++; await refresh(); }
+    if (pendingLocation !== location || lastLocation !== location) return;
+    const resource = findResource(location);
+    if (!resource) { status("El recurso no está entre los archivos cargados ni en un preload literal disponible. No se ha solicitado al servidor."); return; }
+    pendingLocation = null;
+    return await show({ ...location, url: resource.url });
   } finally { if (pendingLocation === location) pendingLocation = null; }
 };
 chrome.devtools.inspectedWindow.onResourceAdded.addListener((resource) => {
   if (isExtensionResource(resource.url)) return;
-  if (resource.type !== "script" && !/\.[cm]?js(?:[?#]|$)/i.test(resource.url)) return;
+  // executeScript inventory queries appear as anonymous debugger VM scripts.
+  // They are not getResources entries; reacting to them would query forever.
+  if (/^debugger:\/\/\/VM\d+(?:[?#]|$)/i.test(resource.url)) return;
+  if (resource.type !== "script" && !/\.[cm]?js(?:[?#]|$)/i.test(resource.url) && !isXML(resource.url)) return;
   clearTimeout(resourceTimer);
   resourceTimer = setTimeout(() => { revision++; refresh(); }, 400);
 });

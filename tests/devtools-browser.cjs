@@ -4,6 +4,12 @@ const { chromium } = require("playwright"), assert = require("node:assert/strict
 const root = path.resolve(__dirname, ".."), output = path.join(root, "test-results");
 fs.mkdirSync(output, { recursive: true });
 const sources = {
+  "/lazy/view/Runtime.view.xml": '<mvc:View xmlns:mvc="sap.ui.core.mvc" controllerName="demo.controller.Main"><Button press=".onSave"/></mvc:View>',
+  "/lazy/fragment/Runtime.fragment.xml": '<FragmentDefinition><Button press=".onSave"/></FragmentDefinition>',
+  "/demo/view/Main.view.xml": '<mvc:View xmlns:mvc="sap.ui.core.mvc" xmlns="sap.m" controllerName="demo.controller.Main">\n  <Button text="&lt;img src=x onerror=alert(1)&gt;" press=".onSave($event, &quot;sample&quot;)"/>\n</mvc:View>',
+  "/demo/fragment/Dialog.fragment.xml": '<FragmentDefinition xmlns="sap.ui.core" xmlns:m="sap.m">\n  <m:Button press="onSave"/>\n</FragmentDefinition>',
+  "/demo/controller/Main.controller.js": 'sap.ui.define([], function() {\n  return Controller.extend("demo.controller.Main", {\n    onSave: function() { throw new Error("Never execute a handler"); }\n  });\n});',
+  "/demo/Component-preload.js": 'sap.ui.require.preload({"demo/fragment/Bundled.fragment.xml": "<FragmentDefinition><Button press=\\\".onSave\\\"/></FragmentDefinition>"});',
   "/A.controller.js": 'window.A = {\n  onOther: function (event) { return "other"; },\n  onAction: function (event) {\n    return "A";\n  },\n  first: function () { return this.second(); },\n  second: function () {}\n};',
   "/B.controller.js": 'window.B = {\n  onOther: function (event) { return "other"; },\n  onAction: function (event) {\n    return "B";\n  },\n  first: function () {},\n  second: function () {}\n};',
   "/Inline.controller.js": 'window.Inline={onFirst:function(e){return e+1},onAction:function(e){return e+2}};',
@@ -312,6 +318,67 @@ const server = http.createServer((request, response) => {
     await panelEval(`(() => { const token = [...document.querySelectorAll('.identifier')].find(el => el.textContent === 'createValueHelp'); token.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })); })()`);
     await panelEval(`(() => { const button = [...document.querySelectorAll('#candidates button')].find(el => el.textContent.startsWith('Wrapper asignado')); button.click(); })()`);
     assert.equal(await panelEval('document.querySelector(".selected").dataset.line'), "6", "The wrapper candidate selects its exact function line");
+    // Read XML over the network and from a literal preload without executing it.
+    await page.evaluate(async (paths) => { for (const path of paths) await fetch(path).then((r) => r.text()); }, ["/demo/view/Main.view.xml", "/demo/fragment/Dialog.fragment.xml", "/demo/controller/Main.controller.js", "/demo/Component-preload.js"]);
+    await panelEval('document.getElementById("refresh").click()');
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await panelEval('[...document.querySelectorAll(".file")].some(el => el.textContent === "Bundled.fragment.xml")')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(await panelEval('[...document.querySelectorAll(".file")].some(el => el.textContent === "Bundled.fragment.xml")'), "Preloaded XML appears in the tree");
+    await panelEval(`window.openLocation({url: ${JSON.stringify(url + "/demo/view/Main.view.xml")}, line: 0})`);
+    assert.equal(await panelEval('document.querySelector(".xml-handler").textContent'), ".onSave", "Parameterized handler links preserve the original XML text");
+    assert.equal(await panelEval('document.querySelectorAll("#code img").length'), 0, "XML markup remains inert text");
+    await panelEval('document.querySelector(".xml-handler").dispatchEvent(new MouseEvent("click", {bubbles:true, ctrlKey:true}))');
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (await panelEval('document.getElementById("filename").textContent === "Main.controller.js"')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(await panelEval('document.querySelector(".destination").textContent'), "onSave", "XML event navigates to the controller method");
+    await panelEval('document.getElementById("back").click()');
+    assert.equal(await panelEval('document.getElementById("filename").textContent'), "Main.view.xml", "Back restores XML and its source location");
+    for (const name of ["Dialog", "Bundled"]) {
+      await panelEval(`window.openLocation({url: ${JSON.stringify(url + "/demo/fragment/")} + ${JSON.stringify(name + ".fragment.xml")}, path: ${JSON.stringify("demo/fragment/" + name + ".fragment.xml")}, xmlContext: ["demo.controller.Main"], moduleUrls: {"demo/controller/Main.controller": ${JSON.stringify(url + "/demo/controller/Main.controller.js")}}})`);
+      assert.equal(await panelEval('document.getElementById("filename").textContent'), name + ".fragment.xml");
+      await panelEval('document.querySelector(".xml-handler").focus(); document.querySelector(".xml-handler").dispatchEvent(new KeyboardEvent("keydown", {bubbles:true, ctrlKey:true, key:"Enter"}))');
+      assert.equal(await panelEval('document.querySelector(".destination").textContent'), "onSave", "Fragment event uses its explicit controller context");
+      await panelEval('document.getElementById("back").click()');
+      assert.equal(await panelEval('document.getElementById("filename").textContent'), name + ".fragment.xml");
+    }
+    // Register runtime controls whose XML has never appeared in DevTools' list.
+    const lazyRequests = [];
+    page.on("request", (request) => { if (request.url().includes("/lazy/")) lazyRequests.push(request.url()); });
+    await page.evaluate(() => {
+      const old = sap.ui.require, toUrl = old.toUrl;
+      const controller = { getMetadata: () => ({ getName: () => "demo.controller.Main" }) };
+      const view = { getId: () => "lazy-view", getViewName: () => "lazy.view.Runtime", getController: () => controller,
+        isA: (type) => type === "sap.ui.core.mvc.View", getMetadata: () => ({ getName: () => "sap.ui.core.mvc.XMLView" }) };
+      const fragment = { getId: () => "lazy-fragment", isA: () => false, getParent: () => view, _sapui_declarativeSourceInfo: { fragmentName: "lazy.fragment.Runtime" } };
+      sap.ui.require = Object.assign((name, ...args) => name === "sap/ui/core/Element" ? { registry: { all: () => ({ view, fragment }) } } : old(name, ...args), old);
+      sap.ui.require.toUrl = (path) => /^(?:lazy\/|demo\/controller\/)/.test(path) ? new URL("/" + path, location.href).href : toUrl(path);
+    });
+    await panelEval('document.getElementById("refresh").click()');
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await panelEval('document.querySelectorAll(".file.xml-file").length >= 5')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(await panelEval('[...document.querySelectorAll(".file")].some(el => el.textContent === "Runtime.view.xml")'), "Runtime view appears without a DevTools XML resource");
+    assert.ok(await panelEval('[...document.querySelectorAll(".file")].some(el => el.textContent === "Runtime.fragment.xml")'), "Runtime fragment appears without a DevTools XML resource");
+    assert.deepEqual(lazyRequests, [], "Listing runtime XML does not fetch source");
+    for (const kind of ["view", "fragment"]) {
+      const path = `lazy/${kind}/Runtime.${kind}.xml`;
+      await panelEval(`document.querySelector('.file[data-url=${JSON.stringify(url + "/" + path)}]').click()`);
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await panelEval(`document.getElementById("filename").textContent === ${JSON.stringify("Runtime." + kind + ".xml")} && Boolean(document.querySelector(".xml-handler"))`)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.equal(await panelEval('document.getElementById("filename").textContent'), `Runtime.${kind}.xml`);
+      await panelEval('document.querySelector(".xml-handler").dispatchEvent(new MouseEvent("click", {bubbles:true, ctrlKey:true}))');
+      assert.equal(await panelEval('document.querySelector(".destination").textContent'), "onSave", "Runtime XML navigates using its real associated controller");
+      await panelEval('document.getElementById("back").click()');
+      assert.equal(await panelEval('document.getElementById("filename").textContent'), `Runtime.${kind}.xml`);
+    }
+    assert.equal(lazyRequests.length, 2, "Only selected XML sources are requested");
     await panelEval(`(() => { const input = document.getElementById('filter'); input.value = 'Helper.js'; input.dispatchEvent(new Event('input')); })()`);
     assert.equal(await panelEval('document.querySelectorAll(".file").length'), 1, "Filtering retains only matching leaves and their folder hierarchy");
     await panelEval('document.querySelector(".file").click()');

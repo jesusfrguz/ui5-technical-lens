@@ -116,6 +116,12 @@ function render() {
     copy.textContent = "⧉"; copy.title = "Copiar ruta técnica"; copy.setAttribute("aria-label", `Copiar ${entry.path}`);
     copy.addEventListener("click", () => navigator.clipboard.writeText(entry.path).then(() => message(`Ruta copiada: ${entry.path}`)).catch(showError));
     actions.append(focus, copy); item.append(badge, body, actions); container.append(item);
+    if (["view", "fragment"].includes(entry.kind) && /\.xml$/.test(entry.path)) {
+      const open = document.createElement("button"); open.textContent = "XML"; open.title = "Abrir XML en UI5 Code";
+      open.setAttribute("aria-label", `Abrir ${entry.path} en UI5 Code`);
+      open.onclick = () => background("openXML", { key: entry.key, frameId: entry.frameId }).then((result) => message(result.status)).catch(showError);
+      actions.append(open);
+    }
   }
   container.scrollTop = scrollTop;
 }

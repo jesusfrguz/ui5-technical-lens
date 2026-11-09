@@ -5,13 +5,13 @@
     <button id="back" title="Volver (Alt+←)" disabled>← Volver</button>
     <button id="find-open" title="Buscar en el código (Ctrl+F)">Buscar</button>
     <button id="refresh">Actualizar</button><button id="last" disabled>Última función</button><button id="sources" disabled>Abrir en Sources</button>
-    <details id="help"><summary>Atajos</summary><p id="hint">Ctrl+clic en una función, método, variable, constante o ruta de importación para ir a su definición. También Ctrl+Enter sobre el nombre o la ruta con foco. Ctrl+F para buscar y Esc para cerrar la búsqueda. Alt+← para volver.</p></details>
+    <details id="help"><summary>Atajos</summary><p id="hint">Ctrl+clic en una función, método, variable, constante o ruta de importación para ir a su definición. En XML, Ctrl+clic en un handler para ir al método del controlador. También Ctrl+Enter sobre el nombre o la ruta con foco. Ctrl+F para buscar y Esc para cerrar la búsqueda. Alt+← para volver.</p></details>
   </header>
   <div id="workspace">
     <aside id="sidebar" aria-label="Explorador de archivos">
       <h2>Archivos</h2>
       <input id="filter" type="search" aria-label="Filtrar archivos" placeholder="Filtrar archivos…">
-      <nav id="files" aria-label="Árbol de archivos JavaScript"></nav>
+      <nav id="files" aria-label="Árbol de archivos JavaScript y XML"></nav>
     </aside>
     <section id="editor" aria-label="Visor de código">
       <div id="filename">Selecciona un archivo</div>
@@ -30,12 +30,12 @@
         <button id="search-more" hidden>Mostrar más resultados</button>
       </section>
       <div id="candidates" aria-label="Definiciones candidatas" hidden></div>
-      <main id="viewport" tabindex="0" aria-label="Código JavaScript"><pre id="code"></pre></main>
+      <main id="viewport" tabindex="0" aria-label="Código JavaScript y XML"><pre id="code"></pre></main>
       <footer id="statusbar">
         <div id="status" role="status" aria-live="polite">Selecciona un archivo.</div>
         <div id="load-status" role="status" aria-live="polite"></div>
       </footer>
     </section>
   </div>
-  <script src="vendor/acorn.js"></script><script src="code-navigation.js"></script><script src="code-panel.js"></script>
+  <script src="vendor/acorn.js"></script><script src="code-navigation.js"></script><script src="code-xml.js"></script><script src="code-panel.js"></script>
 </body></html>

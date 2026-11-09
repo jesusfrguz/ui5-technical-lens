@@ -268,7 +268,19 @@
       if (doc) ensure(doc);
       return doc && !doc.error ? [...new Set([...doc.moduleLinks.values()].filter((r) => r.ui5 && !r.module.startsWith(".")).map((r) => r.module))] : [];
     }
-    return { resolve, moduleOffsets, moduleNames, documents: docs };
+    function controllerMethod(controller, method) {
+      const module = controller.startsWith("module:") ? controller.slice(7).replace(/\.js$/, "") : controller.replace(/\./g, "/") + ".controller";
+      const origin = docs[0];
+      if (!origin) return [];
+      const found = imported(origin, { module, imported: "default", ui5: true })
+        .flatMap((v) => values(v.doc, v.node)).flatMap((v) => members(v, method));
+      return [...new Map(found.map((v) => {
+        const n = v.definition || v.node;
+        const location = { url: v.doc.url, offset: n.start, line: n.loc.start.line - 1, column: n.loc.start.column, name: method };
+        return [`${location.url}:${location.offset}`, location];
+      })).values()];
+    }
+    return { resolve, moduleOffsets, moduleNames, controllerMethod, documents: docs };
   }
   const api = { create };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
