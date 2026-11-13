@@ -25,7 +25,7 @@
   const weakRef = (value) => value && (typeof value === "object" || typeof value === "function") ? new WeakRef(value) : null;
   let lastFragmentCleanup = -Infinity;
 
-  function remember(content, name, type, source = "capturado", context = {}) {
+  function remember(content, name, type, source = "capturado", context = {}, notify = true) {
     if (typeof name !== "string" || !name) return;
     const roots = (Array.isArray(content) ? content : [content]).filter((c) => c && typeof c.getId === "function");
     if (!roots.length) return;
@@ -46,7 +46,7 @@
         })) fragments.delete(storedKey);
       }
     }
-    schedule(true);
+    if (notify) schedule(true);
   }
 
   function wrap(target, key, after, before) {
@@ -179,7 +179,8 @@
       }
       const info = control._sapui_declarativeSourceInfo;
       // Only real source metadata qualifies; never guess fragments from ID prefixes.
-      if (info?.fragmentName) remember(control, info.fragmentName, "XML", "origen UI5");
+      // This fragment is already included in this scan; it needs no extra frame.
+      if (info?.fragmentName) remember(control, info.fragmentName, "XML", "origen UI5", {}, false);
     }
     for (const [key, record] of fragments) {
       const roots = record.rootRefs.map((ref) => ref.deref()).filter((control) => control && !safe(() => control.isDestroyed(), control.bIsDestroyed || control._bIsBeingDestroyed || false));
@@ -379,11 +380,13 @@
     // Only view/fragment file names remain persistent. Data is inspected on hover.
     const drawingEntries = entries.filter((entry) => (entry.kind === "view" || entry.kind === "fragment") && preferences[kindOption[entry.kind]]);
     let boxes = 0;
-    for (const entry of drawingEntries) {
+    drawing: for (const entry of drawingEntries) {
       const nodes = [...new Set(entry.roots.flatMap(domRoots))];
       for (const node of nodes) {
+        if (boxes >= 300) break drawing;
         const rect = visibleRect(node);
-        if (!rect || boxes++ >= 300) continue;
+        if (!rect) continue;
+        boxes++;
         const plane = planeFor(node);
         const box = document.createElement("div"), label = document.createElement("span");
         box.className = `box ${entry.kind}${selected === entry.key || entry.keys?.includes(selected) ? " selected" : ""}`;
@@ -402,8 +405,14 @@
           const shared = H.intersect({ left, top, right: left + width, bottom: top + height }, other);
           return total + (shared ? shared.width * shared.height : 0);
         }, 0);
-        candidates.sort((a, b) => overlap(a) - overlap(b));
-        const [left, top] = candidates[0];
+        // Score each position once; retain the first position for equal scores.
+        let best = candidates[0], bestOverlap = overlap(best);
+        for (const candidate of candidates.slice(1)) {
+          if (bestOverlap === 0) break;
+          const score = overlap(candidate);
+          if (score < bestOverlap) { best = candidate; bestOverlap = score; }
+        }
+        const [left, top] = best;
         label.style.left = `${left - rect.left - 2}px`;
         label.style.top = `${top - rect.top}px`;
         label.style.maxWidth = `${Math.max(20, innerWidth - rect.left - 6)}px`;
@@ -426,9 +435,10 @@
         const kinds = [...new Set(items.filter((entry) => preferences[kindOption[entry.kind]])
           .map((entry) => entry.kind === "event" ? "controller" : entry.kind))];
         if (!kinds.length) continue;
+        if (count >= 300) break;
         const rect = visibleRect(node);
         if (!rect) continue;
-        if (count++ >= 300) break;
+        count++;
         kinds.forEach((kind, index) => {
           const outline = document.createElement("div");
           outline.className = `discovery-outline ${kind}`;

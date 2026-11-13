@@ -1,5 +1,7 @@
 # UI5 Technical Lens
 
+La versión **1.7.10** mejora el rendimiento de la superposición: detiene las comprobaciones de visibilidad al alcanzar 300 regiones visibles, reduce los cálculos de posición de las etiquetas y evita repintados redundantes al recopilar fragmentos declarativos. El inventario conserva todos los elementos detectados.
+
 La versión **1.7.9** comprueba si una app ABAP acaba de cargar recursos con un token distinto del actual del servidor, incluso cuando proceden de la caché del navegador. Lee las URLs de peticiones reales mediante Resource Timing, sin tomar la ruta predicha por el cargador como prueba de la versión ejecutada. Para tokens de aplicación con sufijo (por ejemplo `~token~5`), consulta `ui5_app_info_json?id=<sap.app/id>` y busca el token en la URL de la app o en su hint de componente. Para tokens por archivo, compara cada recurso con su entrada en `sap-ui-cachebuster-info.json`. No compara tokens de aplicación con timestamps individuales.
 
 Comprueba al detectar una aplicación activa o nuevos tokens cargados, y al entrar de nuevo en una app desde otro destino del Launchpad. La detección de navegación, recursos y registro tardío de componentes es local y agrupa los eventos; las comprobaciones repetidas de la misma entrada reutilizan su resultado. **No hay consultas periódicas ni por recuperar el foco**, y cambiar la ruta interna de una misma app no provoca una nueva consulta. **Comprobar cambios** permite solicitar una comprobación nueva manualmente.
@@ -14,7 +16,7 @@ Creada por **Jesús Franco Guzmán** · [LinkedIn](https://www.linkedin.com/in/j
 
 La versión **1.7.7** corrige la apertura de vistas y fragmentos XML cuando DevTools no los enumera, especialmente en cargas AJAX y recursos `?eval`. El árbol consulta el inventario real de UI5 y lee cada XML al seleccionarlo, usando primero la caché del navegador. También conserva la petición de apertura durante el arranque y evita actualizaciones causadas por las propias consultas de la extensión.
 
-La versión **1.7.6** optimiza el espacio vertical de UI5 Code con barras y árbol compactos, ayuda desplegable, estados en una barra inferior y menor interlineado. También amplía la navegación con **Ctrl+clic** a variables, constantes y librerías importadas, incluidos sus métodos estáticos y de `prototype`. También busca el texto seleccionado en el visor al pulsar **Ctrl+F** y muestra una lista pulsable de coincidencias al buscar en todos los archivos, con fichero, línea, columna y vista previa. Conserva el árbol lateral, la navegación a definiciones mediante **Ctrl+clic**, el historial y las funciones de inspección anteriores. Para actualizar, sustituye los archivos de la instalación descomprimida por los del ZIP nuevo, pulsa **Recargar** en `chrome://extensions` o `edge://extensions`, comprueba que aparece **1.7.9**, recarga después la pestaña de la app y cierra/vuelve a abrir DevTools. Si cargas `dist/UI5-Technical-Lens`, ejecuta `npm run package` después de cambiar el código para actualizar esa copia.
+La versión **1.7.6** optimiza el espacio vertical de UI5 Code con barras y árbol compactos, ayuda desplegable, estados en una barra inferior y menor interlineado. También amplía la navegación con **Ctrl+clic** a variables, constantes y librerías importadas, incluidos sus métodos estáticos y de `prototype`. También busca el texto seleccionado en el visor al pulsar **Ctrl+F** y muestra una lista pulsable de coincidencias al buscar en todos los archivos, con fichero, línea, columna y vista previa. Conserva el árbol lateral, la navegación a definiciones mediante **Ctrl+clic**, el historial y las funciones de inspección anteriores. Para actualizar, sustituye los archivos de la instalación descomprimida por los del ZIP nuevo, pulsa **Recargar** en `chrome://extensions` o `edge://extensions`, comprueba que aparece **1.7.10**, recarga después la pestaña de la app y cierra/vuelve a abrir DevTools. Si cargas `dist/UI5-Technical-Lens`, ejecuta `npm run package` después de cambiar el código para actualizar esa copia.
 
 ## Vista de ejemplo
 
@@ -147,6 +149,8 @@ Se dibujan hasta **300 regiones visibles por marco** para limitar el coste de la
 La extensión no envía datos, no usa servicios externos ni incluye analítica. Solicita acceso a HTTP/HTTPS para poder detectar UI5 e inspeccionar apps dentro de iframes, `scripting` para consultar el contexto de la app y `storage` para recordar opciones por pestaña durante la sesión. Los scripts se registran al inicio. La captura pasiva del origen de fragmentos comienza cuando su módulo UI5 está disponible; la inspección del inventario y las etiquetas se activan al abrir el popup o encender la superposición. Consulta `PRIVACY.md`.
 
 ## Demo y pruebas
+
+Las pruebas de rendimiento del inspector incluyen un inventario de 1000 vistas: el dibujo limita las comprobaciones de visibilidad a las necesarias para obtener 300 regiones visibles, conservando el inventario completo. También comprueban que los elementos ocultos no consuman ese límite y que recopilar fragmentos declarativos no programe repintados adicionales.
 
 Se necesita Node.js para desarrollo; la extensión instalada no lo necesita.
 
